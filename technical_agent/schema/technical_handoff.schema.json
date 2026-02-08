@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TechnicalAnalystHandoff",
+  "type": "object",
+  "required": ["schema_version", "agent", "generated_at", "request", "tickers"],
+  "properties": {
+    "schema_version": { "type": "string" },
+    "agent": { "type": "string" },
+    "generated_at": { "type": "string" },
+    "request": {
+      "type": "object",
+      "properties": {
+        "tickers": { "type": "array", "items": { "type": "string" } },
+        "start_date": { "type": ["string", "null"] },
+        "end_date": { "type": ["string", "null"] },
+        "interval": { "type": "string" }
+      }
+    },
+    "tickers": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "latest_price",
+          "trend",
+          "trend_strength",
+          "support_levels",
+          "resistance_levels",
+          "signal_summary",
+          "indicator_snapshot",
+          "summary"
+        ],
+        "properties": {
+          "latest_price": { "type": ["number", "null"] },
+          "trend": { "type": "string" },
+          "trend_strength": { "type": "number" },
+          "support_levels": { "type": "array", "items": { "type": "number" } },
+          "resistance_levels": { "type": "array", "items": { "type": "number" } },
+          "signal_summary": {
+            "type": "object",
+            "properties": {
+              "bullish": { "type": "integer" },
+              "bearish": { "type": "integer" },
+              "neutral": { "type": "integer" },
+              "top_signals": { "type": "array" }
+            }
+          },
+          "indicator_snapshot": { "type": "object" },
+          "summary": { "type": "string" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,158 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Inter", "Segoe UI", Arial, sans-serif;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+.app {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+header {
+  margin-bottom: 24px;
+}
+
+header h1 {
+  margin: 0 0 8px 0;
+  font-size: 32px;
+}
+
+header p {
+  margin: 0;
+  color: #94a3b8;
+}
+
+main {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 24px;
+}
+
+.controls {
+  background: #111827;
+  border: 1px solid #1e293b;
+  padding: 16px;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.controls h2 {
+  margin: 0 0 8px 0;
+  font-size: 18px;
+}
+
+.controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+}
+
+.controls input,
+.controls textarea {
+  border-radius: 8px;
+  border: 1px solid #334155;
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 8px 10px;
+}
+
+.controls button {
+  border: none;
+  background: #2563eb;
+  color: #f8fafc;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.controls button:disabled {
+  background: #475569;
+  cursor: not-allowed;
+}
+
+.grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.chat {
+  background: #111827;
+  border: 1px solid #1e293b;
+  padding: 16px;
+  border-radius: 12px;
+  min-height: 420px;
+}
+
+.chat h2 {
+  margin: 0 0 12px 0;
+  font-size: 18px;
+}
+
+.chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.message {
+  padding: 12px;
+  border-radius: 10px;
+  background: #0f172a;
+  border: 1px solid #1e293b;
+}
+
+.message.user {
+  border-left: 4px solid #38bdf8;
+}
+
+.message.assistant {
+  border-left: 4px solid #22c55e;
+}
+
+.message h3 {
+  margin: 0 0 6px 0;
+  font-size: 14px;
+  color: #cbd5f5;
+}
+
+pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  font-size: 13px;
+  color: #e2e8f0;
+}
+
+details {
+  margin-top: 8px;
+}
+
+footer {
+  margin-top: 24px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+code {
+  background: #1e293b;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+
+@media (max-width: 900px) {
+  main {
+    grid-template-columns: 1fr;
+  }
+}
