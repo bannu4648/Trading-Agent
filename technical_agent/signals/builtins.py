@@ -28,6 +28,32 @@ def _get_last_two_rows(
     return subset.iloc[-2], subset.iloc[-1]
 
 
+def _parse_period(col: str, prefix: str) -> int:
+    try:
+        return int(str(col).replace(prefix, "").split("_")[0])
+    except (ValueError, TypeError):
+        return 0
+
+
+def _find_period_column(df: pd.DataFrame, prefix: str) -> Optional[str]:
+    candidates = [col for col in df.columns if str(col).startswith(prefix)]
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda c: _parse_period(str(c), prefix))[-1]
+
+
+def _select_two_period_columns(
+    df: pd.DataFrame, prefix: str, preferred: List[str]
+) -> Optional[List[str]]:
+    if all(col in df.columns for col in preferred):
+        return preferred
+    candidates = [col for col in df.columns if str(col).startswith(prefix)]
+    if len(candidates) < 2:
+        return None
+    candidates = sorted(candidates, key=lambda c: _parse_period(str(c), prefix))
+    return [candidates[0], candidates[1]]
+
+
 def _build_signal(
     name: str,
     symbol: str,
@@ -54,20 +80,24 @@ def _build_signal(
 def sma_crossover_signal(
     symbol: str, df: pd.DataFrame, config: SignalConfig
 ) -> List[Signal]:
-    rows = _get_last_two_rows(df, ["sma_20", "sma_50"])
+    cols = _select_two_period_columns(df, "sma_", ["sma_20", "sma_50"])
+    if not cols:
+        return []
+    rows = _get_last_two_rows(df, cols)
     if rows is None:
         return []
     prev, last = rows
+    short_col, long_col = cols
     direction = None
-    if prev["sma_20"] <= prev["sma_50"] and last["sma_20"] > last["sma_50"]:
+    if prev[short_col] <= prev[long_col] and last[short_col] > last[long_col]:
         direction = "bullish"
-    elif prev["sma_20"] >= prev["sma_50"] and last["sma_20"] < last["sma_50"]:
+    elif prev[short_col] >= prev[long_col] and last[short_col] < last[long_col]:
         direction = "bearish"
 
     if direction is None:
         return []
 
-    strength = abs(last["sma_20"] - last["sma_50"]) / max(1e-9, last["sma_50"])
+    strength = abs(last[short_col] - last[long_col]) / max(1e-9, last[long_col])
     return [
         _build_signal(
             name="sma_crossover",
@@ -76,8 +106,8 @@ def sma_crossover_signal(
             direction=direction,
             strength=min(1.0, strength),
             horizon="medium",
-            rationale="SMA 20/50 crossover detected.",
-            indicators={"sma_20": last["sma_20"], "sma_50": last["sma_50"]},
+            rationale=f"SMA crossover detected ({short_col}/{long_col}).",
+            indicators={short_col: last[short_col], long_col: last[long_col]},
         )
     ]
 
@@ -86,20 +116,24 @@ def sma_crossover_signal(
 def ema_crossover_signal(
     symbol: str, df: pd.DataFrame, config: SignalConfig
 ) -> List[Signal]:
-    rows = _get_last_two_rows(df, ["ema_12", "ema_26"])
+    cols = _select_two_period_columns(df, "ema_", ["ema_12", "ema_26"])
+    if not cols:
+        return []
+    rows = _get_last_two_rows(df, cols)
     if rows is None:
         return []
     prev, last = rows
+    short_col, long_col = cols
     direction = None
-    if prev["ema_12"] <= prev["ema_26"] and last["ema_12"] > last["ema_26"]:
+    if prev[short_col] <= prev[long_col] and last[short_col] > last[long_col]:
         direction = "bullish"
-    elif prev["ema_12"] >= prev["ema_26"] and last["ema_12"] < last["ema_26"]:
+    elif prev[short_col] >= prev[long_col] and last[short_col] < last[long_col]:
         direction = "bearish"
 
     if direction is None:
         return []
 
-    strength = abs(last["ema_12"] - last["ema_26"]) / max(1e-9, last["ema_26"])
+    strength = abs(last[short_col] - last[long_col]) / max(1e-9, last[long_col])
     return [
         _build_signal(
             name="ema_crossover",
@@ -108,8 +142,8 @@ def ema_crossover_signal(
             direction=direction,
             strength=min(1.0, strength),
             horizon="short",
-            rationale="EMA 12/26 crossover detected.",
-            indicators={"ema_12": last["ema_12"], "ema_26": last["ema_26"]},
+            rationale=f"EMA crossover detected ({short_col}/{long_col}).",
+            indicators={short_col: last[short_col], long_col: last[long_col]},
         )
     ]
 
@@ -118,7 +152,7 @@ def ema_crossover_signal(
 def rsi_extremes_signal(
     symbol: str, df: pd.DataFrame, config: SignalConfig
 ) -> List[Signal]:
-    col = "rsi_14"
+    col = _find_period_column(df, "rsi_")
     if col not in df.columns:
         return []
     series = df[col].dropna()
@@ -278,18 +312,28 @@ def stochastic_cross_signal(
 def adx_trend_signal(
     symbol: str, df: pd.DataFrame, config: SignalConfig
 ) -> List[Signal]:
-    cols = ["adx_14", "plus_di_14", "minus_di_14"]
+    adx_col = _find_period_column(df, "adx_")
+    if not adx_col:
+        return []
+    period = _parse_period(adx_col, "adx_")
+    plus_col = f"plus_di_{period}"
+    minus_col = f"minus_di_{period}"
+    if plus_col not in df.columns:
+        plus_col = _find_period_column(df, "plus_di_") or plus_col
+    if minus_col not in df.columns:
+        minus_col = _find_period_column(df, "minus_di_") or minus_col
+    cols = [adx_col, plus_col, minus_col]
     if any(col not in df.columns for col in cols):
         return []
     subset = df[cols].dropna()
     if subset.empty:
         return []
     last = subset.iloc[-1]
-    if last["adx_14"] < config.adx_trend_threshold:
+    if last[adx_col] < config.adx_trend_threshold:
         return []
 
-    direction = "bullish" if last["plus_di_14"] > last["minus_di_14"] else "bearish"
-    strength = min(1.0, last["adx_14"] / 50.0)
+    direction = "bullish" if last[plus_col] > last[minus_col] else "bearish"
+    strength = min(1.0, last[adx_col] / 50.0)
     return [
         _build_signal(
             name="adx_trend",
@@ -300,9 +344,9 @@ def adx_trend_signal(
             horizon="medium",
             rationale="ADX indicates a strong directional trend.",
             indicators={
-                "adx_14": last["adx_14"],
-                "plus_di_14": last["plus_di_14"],
-                "minus_di_14": last["minus_di_14"],
+                adx_col: last[adx_col],
+                plus_col: last[plus_col],
+                minus_col: last[minus_col],
             },
         )
     ]
@@ -342,6 +386,226 @@ def volume_spike_signal(
             indicators={
                 "volume_zscore": last["volume_zscore"],
                 "returns": last["returns"],
+            },
+        )
+    ]
+
+
+@register_signal("vwap_crossover", "Price crossing VWAP.")
+def vwap_crossover_signal(
+    symbol: str, df: pd.DataFrame, config: SignalConfig
+) -> List[Signal]:
+    rows = _get_last_two_rows(df, ["close", "vwap"])
+    if rows is None:
+        return []
+    prev, last = rows
+    direction = None
+    if prev["close"] <= prev["vwap"] and last["close"] > last["vwap"]:
+        direction = "bullish"
+    elif prev["close"] >= prev["vwap"] and last["close"] < last["vwap"]:
+        direction = "bearish"
+    if direction is None:
+        return []
+    strength = abs(last["close"] - last["vwap"]) / max(1e-9, last["vwap"])
+    return [
+        _build_signal(
+            name="vwap_crossover",
+            symbol=symbol,
+            timestamp=last.name,
+            direction=direction,
+            strength=min(1.0, strength),
+            horizon="short",
+            rationale="Price crossed VWAP.",
+            indicators={"close": last["close"], "vwap": last["vwap"]},
+        )
+    ]
+
+
+@register_signal("supertrend_flip", "Supertrend direction change.")
+def supertrend_flip_signal(
+    symbol: str, df: pd.DataFrame, config: SignalConfig
+) -> List[Signal]:
+    cols = ["supertrend", "close"]
+    if "supertrend_direction" in df.columns:
+        rows = _get_last_two_rows(df, ["supertrend_direction", "supertrend", "close"])
+        if rows is None:
+            return []
+        prev, last = rows
+        if prev["supertrend_direction"] == last["supertrend_direction"]:
+            return []
+        direction = "bullish" if last["supertrend_direction"] > 0 else "bearish"
+        strength = abs(last["close"] - last["supertrend"]) / max(1e-9, last["close"])
+        return [
+            _build_signal(
+                name="supertrend_flip",
+                symbol=symbol,
+                timestamp=last.name,
+                direction=direction,
+                strength=min(1.0, strength),
+                horizon="short",
+                rationale="Supertrend flipped direction.",
+                indicators={
+                    "supertrend": last["supertrend"],
+                    "supertrend_direction": last["supertrend_direction"],
+                    "close": last["close"],
+                },
+            )
+        ]
+
+    rows = _get_last_two_rows(df, cols)
+    if rows is None:
+        return []
+    prev, last = rows
+    if prev["close"] <= prev["supertrend"] and last["close"] > last["supertrend"]:
+        direction = "bullish"
+    elif prev["close"] >= prev["supertrend"] and last["close"] < last["supertrend"]:
+        direction = "bearish"
+    else:
+        return []
+    strength = abs(last["close"] - last["supertrend"]) / max(1e-9, last["close"])
+    return [
+        _build_signal(
+            name="supertrend_flip",
+            symbol=symbol,
+            timestamp=last.name,
+            direction=direction,
+            strength=min(1.0, strength),
+            horizon="short",
+            rationale="Price crossed Supertrend.",
+            indicators={"supertrend": last["supertrend"], "close": last["close"]},
+        )
+    ]
+
+
+@register_signal("donchian_breakout", "Price breaking Donchian channel.")
+def donchian_breakout_signal(
+    symbol: str, df: pd.DataFrame, config: SignalConfig
+) -> List[Signal]:
+    cols = ["close", "donchian_lower", "donchian_upper"]
+    if any(col not in df.columns for col in cols):
+        return []
+    subset = df[cols].dropna()
+    if subset.empty:
+        return []
+    last = subset.iloc[-1]
+    if last["close"] > last["donchian_upper"]:
+        direction = "bullish"
+        rationale = "Close above Donchian upper band."
+        strength = (last["close"] - last["donchian_upper"]) / max(1e-9, last["close"])
+    elif last["close"] < last["donchian_lower"]:
+        direction = "bearish"
+        rationale = "Close below Donchian lower band."
+        strength = (last["donchian_lower"] - last["close"]) / max(1e-9, last["close"])
+    else:
+        return []
+    return [
+        _build_signal(
+            name="donchian_breakout",
+            symbol=symbol,
+            timestamp=last.name,
+            direction=direction,
+            strength=min(1.0, strength),
+            horizon="medium",
+            rationale=rationale,
+            indicators={
+                "close": last["close"],
+                "donchian_lower": last["donchian_lower"],
+                "donchian_upper": last["donchian_upper"],
+            },
+        )
+    ]
+
+
+@register_signal("psar_flip", "Parabolic SAR direction change.")
+def psar_flip_signal(
+    symbol: str, df: pd.DataFrame, config: SignalConfig
+) -> List[Signal]:
+    if "psar_direction" in df.columns:
+        rows = _get_last_two_rows(df, ["psar_direction", "psar", "close"])
+        if rows is None:
+            return []
+        prev, last = rows
+        if prev["psar_direction"] == last["psar_direction"]:
+            return []
+        direction = "bullish" if last["psar_direction"] > 0 else "bearish"
+        strength = abs(last["close"] - last["psar"]) / max(1e-9, last["close"])
+        return [
+            _build_signal(
+                name="psar_flip",
+                symbol=symbol,
+                timestamp=last.name,
+                direction=direction,
+                strength=min(1.0, strength),
+                horizon="short",
+                rationale="Parabolic SAR flipped direction.",
+                indicators={
+                    "psar": last["psar"],
+                    "psar_direction": last["psar_direction"],
+                    "close": last["close"],
+                },
+            )
+        ]
+    rows = _get_last_two_rows(df, ["psar", "close"])
+    if rows is None:
+        return []
+    prev, last = rows
+    if prev["close"] <= prev["psar"] and last["close"] > last["psar"]:
+        direction = "bullish"
+    elif prev["close"] >= prev["psar"] and last["close"] < last["psar"]:
+        direction = "bearish"
+    else:
+        return []
+    strength = abs(last["close"] - last["psar"]) / max(1e-9, last["close"])
+    return [
+        _build_signal(
+            name="psar_flip",
+            symbol=symbol,
+            timestamp=last.name,
+            direction=direction,
+            strength=min(1.0, strength),
+            horizon="short",
+            rationale="Price crossed Parabolic SAR.",
+            indicators={"psar": last["psar"], "close": last["close"]},
+        )
+    ]
+
+
+@register_signal("ichimoku_cloud", "Price position relative to Ichimoku cloud.")
+def ichimoku_cloud_signal(
+    symbol: str, df: pd.DataFrame, config: SignalConfig
+) -> List[Signal]:
+    cols = ["close", "ichimoku_span_a", "ichimoku_span_b"]
+    if any(col not in df.columns for col in cols):
+        return []
+    subset = df[cols].dropna()
+    if subset.empty:
+        return []
+    last = subset.iloc[-1]
+    cloud_top = max(last["ichimoku_span_a"], last["ichimoku_span_b"])
+    cloud_bottom = min(last["ichimoku_span_a"], last["ichimoku_span_b"])
+    if last["close"] > cloud_top:
+        direction = "bullish"
+        rationale = "Price is above the Ichimoku cloud."
+        strength = (last["close"] - cloud_top) / max(1e-9, last["close"])
+    elif last["close"] < cloud_bottom:
+        direction = "bearish"
+        rationale = "Price is below the Ichimoku cloud."
+        strength = (cloud_bottom - last["close"]) / max(1e-9, last["close"])
+    else:
+        return []
+    return [
+        _build_signal(
+            name="ichimoku_cloud",
+            symbol=symbol,
+            timestamp=last.name,
+            direction=direction,
+            strength=min(1.0, strength),
+            horizon="medium",
+            rationale=rationale,
+            indicators={
+                "close": last["close"],
+                "ichimoku_span_a": last["ichimoku_span_a"],
+                "ichimoku_span_b": last["ichimoku_span_b"],
             },
         )
     ]

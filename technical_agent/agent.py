@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from .config import AgentConfig, config_from_env
 from .graph import build_graph
+from .integration import build_handoff_payload
 from .models import AgentOutput, IndicatorSnapshot, TickerAnalysis
 from .utils.serialization import to_serializable
 
@@ -71,6 +72,13 @@ class TechnicalAnalystAgent:
             metadata=metadata,
             request=request,
             tickers=ticker_results,
+            handoff=build_handoff_payload(
+                {
+                    "metadata": metadata,
+                    "request": request,
+                    "tickers": {k: v.to_dict() for k, v in ticker_results.items()},
+                }
+            ),
             errors=errors,
         )
         return output.to_dict()

@@ -7,3 +7,5 @@ yfinance
 pandas
 pandas_ta
 numpy
+fastapi
+uvicorn

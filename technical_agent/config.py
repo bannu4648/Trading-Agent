@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import List
+from typing import Any, Dict, List
 
 
 @dataclass
@@ -37,6 +37,70 @@ class IndicatorConfig:
     willr_period: int = 14
     mfi_period: int = 14
     volume_zscore_period: int = 20
+    ichimoku_tenkan: int = 9
+    ichimoku_kijun: int = 26
+    ichimoku_senkou: int = 52
+    supertrend_period: int = 10
+    supertrend_multiplier: float = 3.0
+    donchian_length: int = 20
+    keltner_length: int = 20
+    keltner_scalar: float = 2.0
+    psar_step: float = 0.02
+    psar_max_step: float = 0.2
+    pivot_lookback: int = 1
+    vwap_enabled: bool = True
+    intraday_overrides: Dict[str, Dict[str, Any]] = field(
+        default_factory=lambda: {
+            "1m": {
+                "sma_periods": [10, 20, 50],
+                "ema_periods": [8, 21],
+                "rsi_period": 9,
+                "macd_fast": 6,
+                "macd_slow": 13,
+                "macd_signal": 5,
+                "bb_length": 20,
+                "bb_std": 2.0,
+            },
+            "5m": {
+                "sma_periods": [10, 20, 50],
+                "ema_periods": [8, 21],
+                "rsi_period": 10,
+                "macd_fast": 8,
+                "macd_slow": 21,
+                "macd_signal": 5,
+            },
+            "15m": {
+                "sma_periods": [20, 50, 100],
+                "ema_periods": [12, 26],
+                "rsi_period": 12,
+            },
+            "30m": {
+                "sma_periods": [20, 50, 100],
+                "ema_periods": [12, 26],
+                "rsi_period": 12,
+            },
+            "1h": {
+                "sma_periods": [20, 50, 100],
+                "ema_periods": [12, 26],
+                "rsi_period": 14,
+            },
+        }
+    )
+
+    def for_interval(self, interval: str) -> "IndicatorConfig":
+        interval_key = interval.lower()
+        overrides = self.intraday_overrides.get(interval_key)
+        if not overrides and interval_key.endswith("m"):
+            overrides = self.intraday_overrides.get("5m")
+        if not overrides and interval_key.endswith("h"):
+            overrides = self.intraday_overrides.get("1h")
+
+        if not overrides:
+            return self
+
+        data = {**self.__dict__}
+        data.update(overrides)
+        return IndicatorConfig(**data)
 
 
 @dataclass

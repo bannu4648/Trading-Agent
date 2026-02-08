@@ -67,12 +67,14 @@ def build_graph(agent_config: AgentConfig):
 
     def indicator_node(state: TechnicalState) -> TechnicalState:
         raw_data = state.get("raw_data", {})
+        request = state.get("request", {})
+        interval = request.get("interval", agent_config.data.interval)
         indicators: Dict[str, pd.DataFrame] = {}
         snapshots: Dict[str, Dict[str, object]] = {}
         errors: List[str] = []
         for symbol, df in raw_data.items():
             try:
-                ind_df = compute_indicators(df, agent_config.indicators)
+                ind_df = compute_indicators(df, agent_config.indicators, interval=interval)
                 indicators[symbol] = ind_df
                 snapshots[symbol] = _build_snapshot(ind_df)
             except Exception as exc:

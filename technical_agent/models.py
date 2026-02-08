@@ -47,6 +47,7 @@ class AgentOutput:
     metadata: Dict[str, Any]
     request: Dict[str, Any]
     tickers: Dict[str, TickerAnalysis]
+    handoff: Dict[str, Any]
     errors: List[str]
 
     def to_dict(self) -> Dict[str, Any]:
@@ -54,6 +55,7 @@ class AgentOutput:
             "metadata": self.metadata,
             "request": self.request,
             "tickers": {k: v.to_dict() for k, v in self.tickers.items()},
+            "handoff": self.handoff,
             "errors": self.errors,
         }
 

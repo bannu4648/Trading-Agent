@@ -6,9 +6,12 @@ Standalone technical analyst agent using LangGraph, yfinance, and pandas-ta.
 
 - Fetches OHLCV data via yfinance
 - Computes a suite of technical indicators
+- Includes intraday indicator presets and VWAP
 - Generates multiple rule-based signals
+- Produces an integration handoff schema for other agents
 - Optional LLM summaries (Ollama or Gemini)
 - Plugin-style registry for custom signals
+ - Optional FastAPI UI to chat with the agent
 
 ## Quick start
 
@@ -37,3 +40,23 @@ LLM_MAX_TOKENS=512
 Add your own signals in `technical_agent/signals/expand.py` or create a new module.
 Then pass `--extra-signal-module your.module.path` or set
 `AgentConfig.extra_signal_modules` programmatically.
+
+## Integration schema
+
+The agent emits a `handoff` payload inside the output, and the JSON schema is stored at:
+
+```
+technical_agent/schema/technical_handoff.schema.json
+```
+
+## UI (chat)
+
+Run the API server:
+
+```bash
+uvicorn technical_agent.server:app --reload
+```
+
+Open: `http://localhost:8000`
+
+The UI posts to `/api/chat` and returns the full structured JSON response.

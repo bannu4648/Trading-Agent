@@ -8,9 +8,20 @@ import pandas_ta as ta
 from ..config import IndicatorConfig
 
 
-def compute_indicators(df: pd.DataFrame, config: IndicatorConfig) -> pd.DataFrame:
+def _column_match(df: pd.DataFrame, contains: str) -> pd.Series | None:
+    for col in df.columns:
+        if contains in str(col):
+            return df[col]
+    return None
+
+
+def compute_indicators(
+    df: pd.DataFrame, config: IndicatorConfig, interval: str = "1d"
+) -> pd.DataFrame:
     if df.empty:
         return df.copy()
+
+    config = config.for_interval(interval)
 
     required_cols = {"close", "high", "low", "volume"}
     missing = required_cols - set(df.columns)
@@ -89,6 +100,123 @@ def compute_indicators(df: pd.DataFrame, config: IndicatorConfig) -> pd.DataFram
     )
 
     data["obv"] = ta.obv(data["close"], data["volume"])
+
+    if config.vwap_enabled:
+        data["vwap"] = ta.vwap(
+            data["high"], data["low"], data["close"], data["volume"]
+        )
+
+    ichimoku = ta.ichimoku(
+        data["high"],
+        data["low"],
+        data["close"],
+        tenkan=config.ichimoku_tenkan,
+        kijun=config.ichimoku_kijun,
+        senkou=config.ichimoku_senkou,
+    )
+    if ichimoku is not None:
+        if isinstance(ichimoku, tuple):
+            ichi_df = ichimoku[0]
+            span_df = ichimoku[1] if len(ichimoku) > 1 else None
+        else:
+            ichi_df = ichimoku
+            span_df = None
+        if ichi_df is not None and not ichi_df.empty:
+            data["ichimoku_tenkan"] = ichi_df.iloc[:, 0]
+            if ichi_df.shape[1] > 1:
+                data["ichimoku_kijun"] = ichi_df.iloc[:, 1]
+            if ichi_df.shape[1] > 2:
+                data["ichimoku_chikou"] = ichi_df.iloc[:, 2]
+        if span_df is not None and not span_df.empty:
+            data["ichimoku_span_a"] = span_df.iloc[:, 0]
+            if span_df.shape[1] > 1:
+                data["ichimoku_span_b"] = span_df.iloc[:, 1]
+
+    supertrend = ta.supertrend(
+        data["high"],
+        data["low"],
+        data["close"],
+        length=config.supertrend_period,
+        multiplier=config.supertrend_multiplier,
+    )
+    if supertrend is not None and not supertrend.empty:
+        sup = _column_match(supertrend, "SUPERT_") or supertrend.iloc[:, 0]
+        sup_dir = _column_match(supertrend, "SUPERTd") or (
+            supertrend.iloc[:, 1] if supertrend.shape[1] > 1 else None
+        )
+        data["supertrend"] = sup
+        if sup_dir is not None:
+            data["supertrend_direction"] = sup_dir
+
+    donchian = ta.donchian(
+        data["high"], data["low"], length=config.donchian_length
+    )
+    if donchian is not None and not donchian.empty:
+        dcl = _column_match(donchian, "DCL") or donchian.iloc[:, 0]
+        dcm = _column_match(donchian, "DCM") or (
+            donchian.iloc[:, 1] if donchian.shape[1] > 1 else None
+        )
+        dch = _column_match(donchian, "DCH") or (
+            donchian.iloc[:, 2] if donchian.shape[1] > 2 else None
+        )
+        data["donchian_lower"] = dcl
+        if dcm is not None:
+            data["donchian_mid"] = dcm
+        if dch is not None:
+            data["donchian_upper"] = dch
+
+    keltner = ta.kc(
+        data["high"],
+        data["low"],
+        data["close"],
+        length=config.keltner_length,
+        scalar=config.keltner_scalar,
+    )
+    if keltner is not None and not keltner.empty:
+        kcl = _column_match(keltner, "KCL") or keltner.iloc[:, 0]
+        kcm = _column_match(keltner, "KCB") or (
+            keltner.iloc[:, 1] if keltner.shape[1] > 1 else None
+        )
+        kcu = _column_match(keltner, "KCU") or (
+            keltner.iloc[:, 2] if keltner.shape[1] > 2 else None
+        )
+        data["keltner_lower"] = kcl
+        if kcm is not None:
+            data["keltner_mid"] = kcm
+        if kcu is not None:
+            data["keltner_upper"] = kcu
+
+    psar = ta.psar(
+        data["high"],
+        data["low"],
+        data["close"],
+        step=config.psar_step,
+        max_step=config.psar_max_step,
+    )
+    if psar is not None and not psar.empty:
+        psar_l = _column_match(psar, "PSARl")
+        psar_s = _column_match(psar, "PSARs")
+        if psar_l is not None or psar_s is not None:
+            data["psar"] = (psar_l if psar_l is not None else psar_s).combine_first(
+                psar_s if psar_s is not None else psar_l
+            )
+            if psar_l is not None and psar_s is not None:
+                direction = pd.Series(index=psar.index, dtype="float64")
+                direction[psar_l.notna()] = 1.0
+                direction[psar_s.notna()] = -1.0
+                data["psar_direction"] = direction
+
+    if config.pivot_lookback >= 1:
+        shift = int(config.pivot_lookback)
+        prev_high = data["high"].shift(shift)
+        prev_low = data["low"].shift(shift)
+        prev_close = data["close"].shift(shift)
+        pivot = (prev_high + prev_low + prev_close) / 3.0
+        data["pivot"] = pivot
+        data["pivot_r1"] = (2 * pivot) - prev_low
+        data["pivot_s1"] = (2 * pivot) - prev_high
+        data["pivot_r2"] = pivot + (prev_high - prev_low)
+        data["pivot_s2"] = pivot - (prev_high - prev_low)
 
     volume_mean = data["volume"].rolling(config.volume_zscore_period).mean()
     volume_std = data["volume"].rolling(config.volume_zscore_period).std()
