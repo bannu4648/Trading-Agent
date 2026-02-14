@@ -25,6 +25,8 @@ python -m technical_agent.cli \
 
 ## Environment variables
 
+Create and edit `.env` at the project root. It is loaded automatically by the app.
+
 ```
 LLM_PROVIDER=ollama | gemini
 OLLAMA_MODEL=llama3:3b
@@ -33,7 +35,21 @@ GEMINI_MODEL=gemini-1.5-flash
 GEMINI_API_KEY=your_api_key
 LLM_TEMPERATURE=0.2
 LLM_MAX_TOKENS=512
+
+# Langfuse tracing (self-hosted/local supported)
+LANGFUSE_ENABLED=true
+LANGFUSE_HOST=http://localhost:3000
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_PROJECT=technical-agent
+LANGFUSE_SESSION_ID=local-dev
+LANGFUSE_USER_ID=dev-user
+LANGFUSE_RELEASE=dev
 ```
+
+## Tracing (Langfuse)
+
+When `LANGFUSE_ENABLED=true`, traces are emitted for graph execution, indicator/signal pipeline spans, and each LLM summary call.
 
 ## Custom signals
 

@@ -17,7 +17,7 @@ def get_llm(llm_config: LLMConfig) -> Any:
                 "Missing dependency langchain-ollama. Install it to use Ollama."
             ) from exc
 
-        model = llm_config.model or "llama3:3b"
+        model = llm_config.model or "llama3.1:8b"
         return ChatOllama(
             model=model,
             base_url=llm_config.base_url or "http://localhost:11434",

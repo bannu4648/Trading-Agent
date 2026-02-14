@@ -9,6 +9,7 @@ from .config import AgentConfig, config_from_env
 from .graph import build_graph
 from .integration import build_handoff_payload
 from .models import AgentOutput, IndicatorSnapshot, TickerAnalysis
+from .tracing import build_trace_runtime
 from .utils.serialization import to_serializable
 
 
@@ -38,8 +39,21 @@ class TechnicalAnalystAgent:
             "end_date": end_date,
             "interval": interval,
         }
-        state = self.graph.invoke({"request": request, "errors": []})
-        return self._build_output(state, request)
+        trace = build_trace_runtime(
+            self.config.tracing,
+            run_name="technical-agent.run",
+            request=request,
+        )
+        invoke_state = {"request": request, "errors": [], "_trace": trace}
+        invoke_config = trace.langchain_config()
+        try:
+            if invoke_config:
+                state = self.graph.invoke(invoke_state, config=invoke_config)
+            else:
+                state = self.graph.invoke(invoke_state)
+            return self._build_output(state, request)
+        finally:
+            trace.flush()
 
     def _build_output(self, state: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]:
         snapshots = state.get("snapshots", {})

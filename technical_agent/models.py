@@ -69,3 +69,4 @@ class TechnicalState(TypedDict, total=False):
     summaries: Dict[str, str]
     output: Dict[str, Any]
     errors: List[str]
+    _trace: Any

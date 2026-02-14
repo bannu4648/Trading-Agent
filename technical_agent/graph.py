@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from typing import Dict, List
 
 import pandas as pd
@@ -12,6 +13,7 @@ from .config import AgentConfig
 from .llm import get_llm
 from .models import TechnicalState
 from .prompts import TECHNICAL_SUMMARY_SYSTEM_PROMPT, build_summary_prompt
+from .tracing import TraceRuntime
 from .tools import compute_indicators, fetch_ohlcv_data, generate_signals
 from .utils.serialization import dumps_json
 
@@ -50,35 +52,49 @@ def build_graph(agent_config: AgentConfig):
 
     def fetch_data_node(state: TechnicalState) -> TechnicalState:
         request = state.get("request", {})
+        trace: TraceRuntime | None = state.get("_trace")
         errors: List[str] = []
-        try:
-            data = fetch_ohlcv_data(
-                tickers=request.get("tickers", []),
-                start_date=request.get("start_date"),
-                end_date=request.get("end_date"),
-                interval=request.get("interval", agent_config.data.interval),
-                auto_adjust=agent_config.data.auto_adjust,
-                prepost=agent_config.data.prepost,
-            )
-        except Exception as exc:
-            data = {}
-            errors.append(f"data_fetch_error:{exc}")
+        span_ctx = (
+            trace.span("fetch_ohlcv_data", input_data=request)
+            if trace is not None
+            else None
+        )
+        with span_ctx if span_ctx is not None else nullcontext():
+            try:
+                data = fetch_ohlcv_data(
+                    tickers=request.get("tickers", []),
+                    start_date=request.get("start_date"),
+                    end_date=request.get("end_date"),
+                    interval=request.get("interval", agent_config.data.interval),
+                    auto_adjust=agent_config.data.auto_adjust,
+                    prepost=agent_config.data.prepost,
+                )
+            except Exception as exc:
+                data = {}
+                errors.append(f"data_fetch_error:{exc}")
         return {"raw_data": data, "errors": _append_errors(state, errors)}
 
     def indicator_node(state: TechnicalState) -> TechnicalState:
         raw_data = state.get("raw_data", {})
         request = state.get("request", {})
+        trace: TraceRuntime | None = state.get("_trace")
         interval = request.get("interval", agent_config.data.interval)
         indicators: Dict[str, pd.DataFrame] = {}
         snapshots: Dict[str, Dict[str, object]] = {}
         errors: List[str] = []
         for symbol, df in raw_data.items():
-            try:
-                ind_df = compute_indicators(df, agent_config.indicators, interval=interval)
-                indicators[symbol] = ind_df
-                snapshots[symbol] = _build_snapshot(ind_df)
-            except Exception as exc:
-                errors.append(f"{symbol}:indicator_error:{exc}")
+            span_ctx = (
+                trace.span(f"compute_indicators:{symbol}", input_data={"symbol": symbol})
+                if trace is not None
+                else None
+            )
+            with span_ctx if span_ctx is not None else nullcontext():
+                try:
+                    ind_df = compute_indicators(df, agent_config.indicators, interval=interval)
+                    indicators[symbol] = ind_df
+                    snapshots[symbol] = _build_snapshot(ind_df)
+                except Exception as exc:
+                    errors.append(f"{symbol}:indicator_error:{exc}")
         return {
             "indicators": indicators,
             "snapshots": snapshots,
@@ -87,9 +103,19 @@ def build_graph(agent_config: AgentConfig):
 
     def signal_node(state: TechnicalState) -> TechnicalState:
         indicators = state.get("indicators", {})
-        signals, signal_errors = generate_signals(
-            indicators, agent_config.signals, agent_config.extra_signal_modules
+        trace: TraceRuntime | None = state.get("_trace")
+        span_ctx = (
+            trace.span(
+                "generate_signals",
+                input_data={"symbols": list(indicators.keys())},
+            )
+            if trace is not None
+            else None
         )
+        with span_ctx if span_ctx is not None else nullcontext():
+            signals, signal_errors = generate_signals(
+                indicators, agent_config.signals, agent_config.extra_signal_modules
+            )
         return {
             "signals": signals,
             "errors": _append_errors(state, signal_errors),
@@ -99,6 +125,8 @@ def build_graph(agent_config: AgentConfig):
         summaries: Dict[str, str] = {}
         snapshots = state.get("snapshots", {})
         signals = state.get("signals", {})
+        trace: TraceRuntime | None = state.get("_trace")
+        llm_config = trace.langchain_config() if trace is not None else {}
         errors: List[str] = []
         for symbol in signals:
             indicator_snapshot = snapshots.get(symbol, {})
@@ -111,17 +139,24 @@ def build_graph(agent_config: AgentConfig):
                 indicator_snapshot_json=dumps_json(indicator_snapshot, indent=2),
                 signals_json=dumps_json(signals_list, indent=2),
             )
-            try:
-                response = llm.invoke(
-                    [
-                        SystemMessage(content=TECHNICAL_SUMMARY_SYSTEM_PROMPT),
-                        HumanMessage(content=prompt),
-                    ]
-                )
-                summaries[symbol] = response.content.strip()
-            except Exception as exc:
-                errors.append(f"{symbol}:llm_summary_error:{exc}")
-                summaries[symbol] = _rule_based_summary(signals_list)
+            span_ctx = (
+                trace.span(f"llm_summary:{symbol}", input_data={"symbol": symbol})
+                if trace is not None
+                else None
+            )
+            with span_ctx if span_ctx is not None else nullcontext():
+                try:
+                    response = llm.invoke(
+                        [
+                            SystemMessage(content=TECHNICAL_SUMMARY_SYSTEM_PROMPT),
+                            HumanMessage(content=prompt),
+                        ],
+                        config=llm_config,
+                    )
+                    summaries[symbol] = response.content.strip()
+                except Exception as exc:
+                    errors.append(f"{symbol}:llm_summary_error:{exc}")
+                    summaries[symbol] = _rule_based_summary(signals_list)
         return {"summaries": summaries, "errors": _append_errors(state, errors)}
 
     graph = StateGraph(TechnicalState)

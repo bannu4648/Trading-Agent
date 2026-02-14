@@ -15,6 +15,13 @@ def _column_match(df: pd.DataFrame, contains: str) -> pd.Series | None:
     return None
 
 
+def _first_non_none(*values: pd.Series | None) -> pd.Series | None:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
 def compute_indicators(
     df: pd.DataFrame, config: IndicatorConfig, interval: str = "1d"
 ) -> pd.DataFrame:
@@ -140,11 +147,13 @@ def compute_indicators(
         multiplier=config.supertrend_multiplier,
     )
     if supertrend is not None and not supertrend.empty:
-        sup = _column_match(supertrend, "SUPERT_") or supertrend.iloc[:, 0]
-        sup_dir = _column_match(supertrend, "SUPERTd") or (
-            supertrend.iloc[:, 1] if supertrend.shape[1] > 1 else None
+        sup = _first_non_none(_column_match(supertrend, "SUPERT_"), supertrend.iloc[:, 0])
+        sup_dir = _first_non_none(
+            _column_match(supertrend, "SUPERTd"),
+            supertrend.iloc[:, 1] if supertrend.shape[1] > 1 else None,
         )
-        data["supertrend"] = sup
+        if sup is not None:
+            data["supertrend"] = sup
         if sup_dir is not None:
             data["supertrend_direction"] = sup_dir
 
@@ -152,14 +161,17 @@ def compute_indicators(
         data["high"], data["low"], length=config.donchian_length
     )
     if donchian is not None and not donchian.empty:
-        dcl = _column_match(donchian, "DCL") or donchian.iloc[:, 0]
-        dcm = _column_match(donchian, "DCM") or (
-            donchian.iloc[:, 1] if donchian.shape[1] > 1 else None
+        dcl = _first_non_none(_column_match(donchian, "DCL"), donchian.iloc[:, 0])
+        dcm = _first_non_none(
+            _column_match(donchian, "DCM"),
+            donchian.iloc[:, 1] if donchian.shape[1] > 1 else None,
         )
-        dch = _column_match(donchian, "DCH") or (
-            donchian.iloc[:, 2] if donchian.shape[1] > 2 else None
+        dch = _first_non_none(
+            _column_match(donchian, "DCH"),
+            donchian.iloc[:, 2] if donchian.shape[1] > 2 else None,
         )
-        data["donchian_lower"] = dcl
+        if dcl is not None:
+            data["donchian_lower"] = dcl
         if dcm is not None:
             data["donchian_mid"] = dcm
         if dch is not None:
@@ -173,14 +185,17 @@ def compute_indicators(
         scalar=config.keltner_scalar,
     )
     if keltner is not None and not keltner.empty:
-        kcl = _column_match(keltner, "KCL") or keltner.iloc[:, 0]
-        kcm = _column_match(keltner, "KCB") or (
-            keltner.iloc[:, 1] if keltner.shape[1] > 1 else None
+        kcl = _first_non_none(_column_match(keltner, "KCL"), keltner.iloc[:, 0])
+        kcm = _first_non_none(
+            _column_match(keltner, "KCB"),
+            keltner.iloc[:, 1] if keltner.shape[1] > 1 else None,
         )
-        kcu = _column_match(keltner, "KCU") or (
-            keltner.iloc[:, 2] if keltner.shape[1] > 2 else None
+        kcu = _first_non_none(
+            _column_match(keltner, "KCU"),
+            keltner.iloc[:, 2] if keltner.shape[1] > 2 else None,
         )
-        data["keltner_lower"] = kcl
+        if kcl is not None:
+            data["keltner_lower"] = kcl
         if kcm is not None:
             data["keltner_mid"] = kcm
         if kcu is not None:

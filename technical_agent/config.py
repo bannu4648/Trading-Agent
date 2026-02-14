@@ -4,7 +4,16 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List
+
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - optional fallback for non-uv runs
+    def load_dotenv(*args, **kwargs):  # type: ignore[no-redef]
+        return False
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 @dataclass
@@ -125,16 +134,37 @@ class LLMConfig:
 
 
 @dataclass
+class TracingConfig:
+    enabled: bool = False
+    project_name: str = "technical-agent"
+    host: str | None = None
+    public_key: str | None = None
+    secret_key: str | None = None
+    user_id: str | None = None
+    session_id: str | None = None
+    release: str | None = None
+
+
+@dataclass
 class AgentConfig:
     data: DataConfig = field(default_factory=DataConfig)
     indicators: IndicatorConfig = field(default_factory=IndicatorConfig)
     signals: SignalConfig = field(default_factory=SignalConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
+    tracing: TracingConfig = field(default_factory=TracingConfig)
     extra_signal_modules: List[str] = field(default_factory=list)
     enable_llm_summary: bool = True
 
 
 def config_from_env() -> AgentConfig:
+    load_dotenv(PROJECT_ROOT / ".env", override=False)
+
+    def _env_bool(name: str, default: bool = False) -> bool:
+        value = os.getenv(name)
+        if value is None:
+            return default
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
     provider = os.getenv("LLM_PROVIDER", "ollama").lower()
     llm_model = os.getenv("OLLAMA_MODEL") if provider == "ollama" else os.getenv("GEMINI_MODEL")
     llm_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -149,4 +179,15 @@ def config_from_env() -> AgentConfig:
         max_tokens=int(os.getenv("LLM_MAX_TOKENS", "512")),
     )
 
-    return AgentConfig(llm=llm_config)
+    tracing_config = TracingConfig(
+        enabled=_env_bool("LANGFUSE_ENABLED", False),
+        project_name=os.getenv("LANGFUSE_PROJECT", "technical-agent"),
+        host=os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL"),
+        public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
+        secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
+        user_id=os.getenv("LANGFUSE_USER_ID"),
+        session_id=os.getenv("LANGFUSE_SESSION_ID"),
+        release=os.getenv("LANGFUSE_RELEASE"),
+    )
+
+    return AgentConfig(llm=llm_config, tracing=tracing_config)
