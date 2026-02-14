@@ -46,12 +46,16 @@ class TechnicalAnalystAgent:
         )
         invoke_state = {"request": request, "errors": [], "_trace": trace}
         invoke_config = trace.langchain_config()
+        output: Dict[str, Any] | None = None
         try:
-            if invoke_config:
-                state = self.graph.invoke(invoke_state, config=invoke_config)
-            else:
-                state = self.graph.invoke(invoke_state)
-            return self._build_output(state, request)
+            with trace.span("technical_agent.run", input_data=request) as run_span:
+                if invoke_config:
+                    state = self.graph.invoke(invoke_state, config=invoke_config)
+                else:
+                    state = self.graph.invoke(invoke_state)
+                output = self._build_output(state, request)
+                run_span.set_output(to_serializable(output))
+                return output
         finally:
             trace.flush()
 

@@ -15,7 +15,7 @@ from .models import TechnicalState
 from .prompts import TECHNICAL_SUMMARY_SYSTEM_PROMPT, build_summary_prompt
 from .tracing import TraceRuntime
 from .tools import compute_indicators, fetch_ohlcv_data, generate_signals
-from .utils.serialization import dumps_json
+from .utils.serialization import dumps_json, to_serializable
 
 
 def _append_errors(state: TechnicalState, new_errors: List[str]) -> List[str]:
@@ -45,6 +45,17 @@ def _rule_based_summary(signals: List[dict]) -> str:
     )
 
 
+def _frame_trace_summary(df: pd.DataFrame) -> Dict[str, object]:
+    if df.empty:
+        return {"rows": 0}
+    return {
+        "rows": int(len(df)),
+        "columns": list(df.columns),
+        "start": str(to_serializable(df.index.min())),
+        "end": str(to_serializable(df.index.max())),
+    }
+
+
 def build_graph(agent_config: AgentConfig):
     llm = None
     if agent_config.enable_llm_summary:
@@ -59,7 +70,7 @@ def build_graph(agent_config: AgentConfig):
             if trace is not None
             else None
         )
-        with span_ctx if span_ctx is not None else nullcontext():
+        with span_ctx if span_ctx is not None else nullcontext() as span:
             try:
                 data = fetch_ohlcv_data(
                     tickers=request.get("tickers", []),
@@ -72,6 +83,14 @@ def build_graph(agent_config: AgentConfig):
             except Exception as exc:
                 data = {}
                 errors.append(f"data_fetch_error:{exc}")
+            if span_ctx is not None:
+                output_summary = {
+                    "symbols": {
+                        symbol: _frame_trace_summary(df) for symbol, df in data.items()
+                    },
+                    "errors": errors,
+                }
+                span.set_output(to_serializable(output_summary))
         return {"raw_data": data, "errors": _append_errors(state, errors)}
 
     def indicator_node(state: TechnicalState) -> TechnicalState:
@@ -88,13 +107,25 @@ def build_graph(agent_config: AgentConfig):
                 if trace is not None
                 else None
             )
-            with span_ctx if span_ctx is not None else nullcontext():
+            with span_ctx if span_ctx is not None else nullcontext() as span:
                 try:
                     ind_df = compute_indicators(df, agent_config.indicators, interval=interval)
                     indicators[symbol] = ind_df
                     snapshots[symbol] = _build_snapshot(ind_df)
+                    if span_ctx is not None:
+                        span.set_output(
+                            to_serializable(
+                                {
+                                    "symbol": symbol,
+                                    "indicator_summary": _frame_trace_summary(ind_df),
+                                    "snapshot": snapshots[symbol],
+                                }
+                            )
+                        )
                 except Exception as exc:
                     errors.append(f"{symbol}:indicator_error:{exc}")
+                    if span_ctx is not None:
+                        span.set_output({"symbol": symbol, "error": str(exc)})
         return {
             "indicators": indicators,
             "snapshots": snapshots,
@@ -112,10 +143,14 @@ def build_graph(agent_config: AgentConfig):
             if trace is not None
             else None
         )
-        with span_ctx if span_ctx is not None else nullcontext():
+        with span_ctx if span_ctx is not None else nullcontext() as span:
             signals, signal_errors = generate_signals(
                 indicators, agent_config.signals, agent_config.extra_signal_modules
             )
+            if span_ctx is not None:
+                span.set_output(
+                    to_serializable({"signals": signals, "errors": signal_errors})
+                )
         return {
             "signals": signals,
             "errors": _append_errors(state, signal_errors),
@@ -140,11 +175,18 @@ def build_graph(agent_config: AgentConfig):
                 signals_json=dumps_json(signals_list, indent=2),
             )
             span_ctx = (
-                trace.span(f"llm_summary:{symbol}", input_data={"symbol": symbol})
+                trace.span(
+                    f"llm_summary:{symbol}",
+                    input_data={
+                        "symbol": symbol,
+                        "system_prompt": TECHNICAL_SUMMARY_SYSTEM_PROMPT,
+                        "user_prompt": prompt,
+                    },
+                )
                 if trace is not None
                 else None
             )
-            with span_ctx if span_ctx is not None else nullcontext():
+            with span_ctx if span_ctx is not None else nullcontext() as span:
                 try:
                     response = llm.invoke(
                         [
@@ -154,9 +196,19 @@ def build_graph(agent_config: AgentConfig):
                         config=llm_config,
                     )
                     summaries[symbol] = response.content.strip()
+                    if span_ctx is not None:
+                        span.set_output({"symbol": symbol, "summary": summaries[symbol]})
                 except Exception as exc:
                     errors.append(f"{symbol}:llm_summary_error:{exc}")
                     summaries[symbol] = _rule_based_summary(signals_list)
+                    if span_ctx is not None:
+                        span.set_output(
+                            {
+                                "symbol": symbol,
+                                "error": str(exc),
+                                "fallback_summary": summaries[symbol],
+                            }
+                        )
         return {"summaries": summaries, "errors": _append_errors(state, errors)}
 
     graph = StateGraph(TechnicalState)

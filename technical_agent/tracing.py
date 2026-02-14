@@ -11,6 +11,42 @@ from .config import TracingConfig
 
 
 @dataclass
+class SpanHandle:
+    """Safe wrapper around a Langfuse span/generation object."""
+
+    observation: Any | None = None
+
+    def update(
+        self,
+        *,
+        input_data: Any | None = None,
+        output_data: Any | None = None,
+        level: str | None = None,
+    ) -> None:
+        if self.observation is None:
+            return
+        payload: Dict[str, Any] = {}
+        if input_data is not None:
+            payload["input"] = input_data
+        if output_data is not None:
+            payload["output"] = output_data
+        if level is not None:
+            payload["level"] = level
+        if not payload:
+            return
+        try:
+            self.observation.update(**payload)
+        except Exception:
+            pass
+
+    def set_output(self, output_data: Any) -> None:
+        self.update(output_data=output_data)
+
+    def set_level(self, level: str) -> None:
+        self.update(level=level)
+
+
+@dataclass
 class TraceRuntime:
     enabled: bool
     callbacks: List[Any] = field(default_factory=list)
@@ -33,9 +69,9 @@ class TraceRuntime:
         input_data: Any | None = None,
         output_data: Any | None = None,
         level: str = "DEFAULT",
-    ) -> Iterator[None]:
+    ) -> Iterator[SpanHandle]:
         if not self.enabled or self.langfuse_client is None:
-            yield
+            yield SpanHandle()
             return
 
         try:
@@ -44,11 +80,11 @@ class TraceRuntime:
                 input=input_data,
                 output=output_data,
                 level=level,
-            ):
-                yield
+            ) as span:
+                yield SpanHandle(span)
         except Exception:
             # Tracing failures must never break agent execution.
-            yield
+            yield SpanHandle()
 
     def flush(self) -> None:
         if not self.enabled or self.langfuse_client is None:
