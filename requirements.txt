@@ -1,0 +1,11 @@
+langgraph
+langchain
+langchain-core
+langchain-ollama
+langchain-google-genai
+yfinance
+pandas
+pandas_ta
+numpy
+fastapi
+uvicorn

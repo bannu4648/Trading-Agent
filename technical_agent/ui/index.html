@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Technical Analyst Agent</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header>
+        <h1>Technical Analyst Agent</h1>
+        <p>Chat with the agent and generate technical analysis.</p>
+      </header>
+
+      <main>
+        <section class="controls">
+          <h2>Request</h2>
+          <label>
+            Tickers
+            <input id="tickers" placeholder="AAPL,MSFT,NVDA" />
+          </label>
+          <div class="grid">
+            <label>
+              Start Date
+              <input id="start-date" type="date" />
+            </label>
+            <label>
+              End Date
+              <input id="end-date" type="date" />
+            </label>
+          </div>
+          <label>
+            Interval
+            <input id="interval" value="1d" placeholder="1d, 1h, 15m" />
+          </label>
+          <label>
+            Message
+            <textarea id="message" rows="4" placeholder="Analyze momentum for AAPL from 2023-01-01 to 2024-01-01."></textarea>
+          </label>
+          <button id="send-btn">Send</button>
+        </section>
+
+        <section class="chat">
+          <h2>Conversation</h2>
+          <div id="chat-log" class="chat-log"></div>
+        </section>
+      </main>
+
+      <footer>
+        <span>API: <code>/api/chat</code> · Schema: <code>/api/schema</code></span>
+      </footer>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
