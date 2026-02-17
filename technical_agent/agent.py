@@ -9,8 +9,8 @@ from .config import AgentConfig, config_from_env
 from .graph import build_graph
 from .integration import build_handoff_payload
 from .models import AgentOutput, IndicatorSnapshot, TickerAnalysis
-from .tracing import build_trace_runtime
-from .utils.serialization import to_serializable
+from .observability.tracing import build_trace_runtime
+from .shared.serialization import to_serializable
 
 
 def _utc_now_iso() -> str:

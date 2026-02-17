@@ -8,7 +8,7 @@ from typing import List
 
 from .agent import TechnicalAnalystAgent
 from .config import config_from_env
-from .utils.serialization import to_serializable
+from .shared.serialization import to_serializable
 
 
 def _parse_args() -> argparse.Namespace:

@@ -13,7 +13,7 @@ from ..signals.registry import (
     load_builtin_signals,
     load_extra_signals,
 )
-from ..utils.serialization import to_serializable
+from ..shared.serialization import to_serializable
 
 
 def generate_signals(

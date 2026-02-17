@@ -13,9 +13,9 @@ from .config import AgentConfig
 from .llm import get_llm
 from .models import TechnicalState
 from .prompts import TECHNICAL_SUMMARY_SYSTEM_PROMPT, build_summary_prompt
-from .tracing import TraceRuntime
+from .observability.tracing import TraceRuntime
 from .tools import compute_indicators, fetch_ohlcv_data, generate_signals
-from .utils.serialization import dumps_json, to_serializable
+from .shared.serialization import dumps_json, to_serializable
 
 
 def _append_errors(state: TechnicalState, new_errors: List[str]) -> List[str]:

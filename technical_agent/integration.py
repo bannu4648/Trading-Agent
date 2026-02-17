@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
 
-from .utils.serialization import to_serializable
+from .shared.serialization import to_serializable
 
 
 def _safe_float(value: Any) -> float | None:
