@@ -18,6 +18,13 @@ A unified stock analysis platform that combines **Technical Analysis** (LangGrap
    PYTHONPATH=. ./venv/bin/python3 run_analysis.py --tickers AAPL,MSFT
    ```
 
+3. **Run the Dashboard (UI)**
+   Launch the visual interface to perform analysis and view recommendations.
+   ```bash
+   PYTHONPATH=. ./venv/bin/python3 dashboard.py
+   ```
+   Open `http://localhost:8050` in your browser.
+
 ## 🛠️ Components
 
 ### 1. Technical Analyst Agent
@@ -32,6 +39,14 @@ A unified stock analysis platform that combines **Technical Analysis** (LangGrap
   - **Analysts**: Institutional consensus via Finnhub.
   - **Web**: Recent articles via DuckDuckGo.
 - Uses a weighted aggregator and a Bull vs. Bear debate agent to reach a final sentiment score.
+
+### 3. Summarizer Agent
+- A high-level synthesis agent that takes the technical and sentiment results and provides a final natural-language recommendation (Buy/Hold/Sell) using the LLM.
+
+### 4. Dash UI
+- A premium, dark-mode dashboard built with Dash and Bootstrap.
+- Allows ticker-based analysis triggering and visual result inspection.
+
 
 ## ⚙️ Configuration (LLM Setup)
 

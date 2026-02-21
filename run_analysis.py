@@ -22,6 +22,7 @@ from technical_agent.shared.serialization import to_serializable
 
 # ── Sentiment agent imports ──
 from sentiment_agent.agents.orchestrator_agent import OrchestratorAgent
+from summarizer_agent import SummarizerAgent
 
 # ── Logging ──
 logging.basicConfig(
@@ -107,7 +108,18 @@ def run_full_analysis(
             "sentiment": ticker_sentiment,
         }
 
-    # 3. Save
+    # 3. Final Synthesis (per-ticker summary)
+    logger.info("── Final Synthesis ──")
+    summarizer = SummarizerAgent()
+    for ticker in tickers:
+        try:
+            summary = summarizer.run(ticker, combined)
+            combined["results"][ticker]["synthesis"] = summary
+        except Exception as exc:
+            logger.error(f"Synthesis failed for {ticker}: {exc}")
+            combined["results"][ticker]["synthesis"] = "Synthesis unavailable."
+
+    # 4. Save
     os.makedirs(output_dir, exist_ok=True)
     safe_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
     tickers_tag = "_".join(tickers[:5])
