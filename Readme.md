@@ -1,99 +1,86 @@
-# Trading-Agent (Technical Analyst Agent)
+# Trading-Agent (Technical + Sentiment Analysis)
 
-Standalone technical analyst agent using LangGraph, yfinance, and pandas-ta.
+A unified stock analysis platform that combines **Technical Analysis** (LangGraph-based indicators and signals) with **Multi-Agent Sentiment Analysis** (News, Social Media, Analyst Consenus, and Web Search).
 
-## Features
+## 🚀 Quick Start
 
-- Fetches OHLCV data via yfinance
-- Computes a suite of technical indicators
-- Includes intraday indicator presets and VWAP
-- Generates multiple rule-based signals
-- Produces an integration handoff schema for other agents
-- Optional LLM summaries (Ollama or Gemini)
-- Plugin-style registry for custom signals
-- Optional FastAPI UI to chat with the agent
+1. **Install Dependencies**
+   Ensure you have Python 3.12+ installed.
+   ```bash
+   python3.12 -m venv venv
+   source venv/bin/activate
+   pip install -r pyproject.toml # or just use the pre-installed venv
+   ```
 
-## Dependency management (uv)
+2. **Run Full Analysis**
+   The unified orchestrator runs both technical and sentiment agents and saves a combined JSON report.
+   ```bash
+   PYTHONPATH=. ./venv/bin/python3 run_analysis.py --tickers AAPL,MSFT
+   ```
 
-This project uses `uv` with `pyproject.toml` (instead of `requirements.txt`).
-Use Python `3.12` or `3.13`.
+## 🛠️ Components
 
-```bash
-uv sync
-```
+### 1. Technical Analyst Agent
+- Fetches OHLCV data and computes 60+ indicators (RSI, MACD, Bollinger Bands, etc.).
+- Generates rule-based signals and optional LLM-driven summaries.
+- Supports **Ollama**, **Gemini**, and **Groq**.
 
-Run commands inside the managed environment with:
+### 2. Multi-Agent Sentiment Agent
+- A sequential LangGraph pipeline that scrapes and analyzes:
+  - **News**: Recent headlines from Finviz/Yahoo.
+  - **Social**: Reddit buzz via ApeWisdom.
+  - **Analysts**: Institutional consensus via Finnhub.
+  - **Web**: Recent articles via DuckDuckGo.
+- Uses a weighted aggregator and a Bull vs. Bear debate agent to reach a final sentiment score.
 
-```bash
-uv run <command>
-```
+## ⚙️ Configuration (LLM Setup)
 
-## Quick start
+Create a `.env` file in the project root. Both agents share these settings.
 
-```bash
-uv run python -m technical_agent.cli \
-  --tickers AAPL,MSFT \
-  --start 2023-01-01 \
-  --end 2024-01-01 \
-  --interval 1d
-```
+### Possible LLM Providers
+| Provider | `LLM_PROVIDER` Value | Required Key | Default Model |
+|----------|----------------------|--------------|---------------|
+| **Groq** | `groq` | `GROQ_API_KEY` | `llama-3.3-70b-versatile` |
+| **Gemini** | `gemini` | `GEMINI_API_KEY` | `gemini-2.0-flash` |
+| **Ollama** | `ollama` | (None) | `llama3.1:8b` |
 
-## Environment variables
+### Example `.env`
+```env
+# --- LLM Provider ---
+LLM_PROVIDER=groq
 
-Create and edit `.env` at the project root. It is loaded automatically by the app.
+# --- API Keys ---
+GROQ_API_KEY=your_groq_key
+GEMINI_API_KEY=your_gemini_key
+FINNHUB_API_KEY=your_finnhub_key
 
-```
-LLM_PROVIDER=ollama | gemini
-OLLAMA_MODEL=llama3:3b
+# --- Model Names ---
+GROQ_MODEL=llama-3.3-70b-versatile
+GEMINI_MODEL=gemini-2.0-flash
+OLLAMA_MODEL=llama3.1:8b
 OLLAMA_BASE_URL=http://localhost:11434
-GEMINI_MODEL=gemini-1.5-flash
-GEMINI_API_KEY=your_api_key
-LLM_TEMPERATURE=0.2
-LLM_MAX_TOKENS=512
 
-# Langfuse tracing (self-hosted/local supported)
-LANGFUSE_ENABLED=true
-LANGFUSE_HOST=http://localhost:3000
-LANGFUSE_PUBLIC_KEY=pk-lf-...
-LANGFUSE_SECRET_KEY=sk-lf-...
-LANGFUSE_PROJECT=technical-agent
-LANGFUSE_SESSION_ID=local-dev
-LANGFUSE_USER_ID=dev-user
-LANGFUSE_RELEASE=dev
+# --- Sentiment Agent Weights ---
+WEIGHT_NEWS=0.35
+WEIGHT_SOCIAL=0.25
+WEIGHT_ANALYST=0.25
+WEIGHT_WEB=0.15
 ```
 
-## Tracing (Langfuse)
-
-When `LANGFUSE_ENABLED=true`, the agent sends traces for:
-
-- LangGraph run execution
-- Indicator/signals pipeline spans
-- Each LLM summary call
-
-The integration uses the official open-source Langfuse Python SDK and LangChain callback handler.
-
-## Custom signals
-
-Add your own signals in `technical_agent/signals/expand.py` or create a new module.
-Then pass `--extra-signal-module your.module.path` or set
-`AgentConfig.extra_signal_modules` programmatically.
-
-## Integration schema
-
-The agent emits a `handoff` payload inside the output, and the JSON schema is stored at:
-
-```
-technical_agent/schema/technical_handoff.schema.json
+## 📊 Output
+Results are saved as JSON files in the `./results/` directory with the following structure:
+```json
+{
+  "results": {
+    "AAPL": {
+      "technical": { "indicators": {...}, "signals": [...], "summary": "..." },
+      "sentiment": { "sentiment_score": 0.42, "sentiment_label": "POSITIVE", ... }
+    }
+  }
+}
 ```
 
-## UI (chat)
-
-Run the API server:
-
-```bash
-uv run uvicorn technical_agent.server:app --reload
-```
-
-Open: `http://localhost:8000`
-
-The UI posts to `/api/chat` and returns the full structured JSON response.
+## 🧪 Advanced Usage
+You can still run components individually:
+- **Technical Agent CLI**: `python3 -m technical_agent.cli --tickers AAPL`
+- **Sentiment Agent CLI**: `python3 sentiment_agent/main.py --ticker AAPL`

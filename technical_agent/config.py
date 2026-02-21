@@ -166,9 +166,19 @@ def config_from_env() -> AgentConfig:
         return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
     provider = os.getenv("LLM_PROVIDER", "ollama").lower()
-    llm_model = os.getenv("OLLAMA_MODEL") if provider == "ollama" else os.getenv("GEMINI_MODEL")
+
+    # pick the right model name and API key for the chosen provider
+    if provider == "ollama":
+        llm_model = os.getenv("OLLAMA_MODEL")
+        llm_api_key = None
+    elif provider == "groq":
+        llm_model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+        llm_api_key = os.getenv("GROQ_API_KEY")
+    else:  # gemini / google
+        llm_model = os.getenv("GEMINI_MODEL")
+        llm_api_key = os.getenv("GEMINI_API_KEY")
+
     llm_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-    llm_api_key = os.getenv("GEMINI_API_KEY")
 
     llm_config = LLMConfig(
         provider=provider,

@@ -43,4 +43,25 @@ def get_llm(llm_config: LLMConfig) -> Any:
             max_output_tokens=llm_config.max_tokens,
         )
 
+    if provider == "groq":
+        try:
+            from langchain_openai import ChatOpenAI
+        except ImportError as exc:
+            raise ImportError(
+                "Missing dependency langchain-openai. Install it to use Groq."
+            ) from exc
+
+        model = llm_config.model or "llama-3.3-70b-versatile"
+        if not llm_config.api_key:
+            raise ValueError("GROQ_API_KEY is required for Groq provider.")
+
+        return ChatOpenAI(
+            model=model,
+            api_key=llm_config.api_key,
+            base_url="https://api.groq.com/openai/v1",
+            temperature=llm_config.temperature,
+            max_tokens=llm_config.max_tokens,
+        )
+
     raise ValueError(f"Unsupported LLM provider: {provider}")
+

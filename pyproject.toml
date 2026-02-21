@@ -18,6 +18,12 @@ dependencies = [
     "numpy",
     "fastapi",
     "uvicorn",
+    "google-genai",
+    "openai",
+    "requests",
+    "beautifulsoup4",
+    "pydantic-settings",
+    "finnhub-python",
 ]
 
 [build-system]
