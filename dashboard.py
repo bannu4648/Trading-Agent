@@ -52,7 +52,7 @@ app.layout = dbc.Container([
     ]),
     dcc.Loading(
         id="loading-spinner",
-        type="overlay",
+        type="default",
         children=html.Div(id="loading-trigger"),
         fullscreen=True,
         style={"backgroundColor": "rgba(0,0,0,0.5)"}
