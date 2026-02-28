@@ -8,6 +8,8 @@ Usage:
     python run_analysis.py --tickers AAPL --start 2025-01-01 --end 2025-06-01
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import logging
@@ -23,6 +25,9 @@ from technical_agent.shared.serialization import to_serializable
 # ── Sentiment agent imports ──
 from sentiment_agent.agents.orchestrator_agent import OrchestratorAgent
 from summarizer_agent import SummarizerAgent
+
+# ── Trader agent imports ──
+from trader_agent.node import run_trader_for_pipeline
 
 # ── Logging ──
 logging.basicConfig(
@@ -119,7 +124,40 @@ def run_full_analysis(
             logger.error(f"Synthesis failed for {ticker}: {exc}")
             combined["results"][ticker]["synthesis"] = "Synthesis unavailable."
 
-    # 4. Save
+    # 4. Trader Agent — position sizing and trade order proposals
+    logger.info("── Trader Agent ──")
+    try:
+        trader_result = run_trader_for_pipeline(combined)
+
+        # Embed each ticker's order directly into its result dict
+        for order in trader_result.get("orders", []):
+            ticker = order.get("ticker")
+            if ticker and ticker in combined["results"]:
+                combined["results"][ticker]["trade_order"] = {
+                    "action":             order.get("action"),
+                    "proposed_weight":    order.get("proposed_weight"),
+                    "weight_delta":       order.get("weight_delta"),
+                    "sizing_method_used": order.get("sizing_method_used"),
+                    "rationale":          order.get("rationale"),
+                }
+
+        # Keep top-level summary (method choice, overall rationale, total invested)
+        combined["trader"] = {
+            "sizing_method_chosen": trader_result.get("sizing_method_chosen"),
+            "overall_rationale":    trader_result.get("overall_rationale"),
+            "total_invested_pct":   trader_result.get("total_invested_pct"),
+        }
+
+        logger.info(
+            f"Trader Agent complete. "
+            f"method={trader_result.get('sizing_method_chosen', 'unknown')} "
+            f"orders={len(trader_result.get('orders', []))}"
+        )
+    except Exception as exc:
+        logger.error(f"Trader Agent failed: {exc}")
+        combined["trader"] = {"error": str(exc)}
+
+    # 5. Save
     os.makedirs(output_dir, exist_ok=True)
     safe_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
     tickers_tag = "_".join(tickers[:5])

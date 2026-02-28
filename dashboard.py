@@ -82,6 +82,13 @@ def run_analysis_ui(n_clicks, ticker_text):
         results = run_full_analysis(tickers=tickers)
         duration = (datetime.now() - start_time).total_seconds()
         
+        # Trader Agent output (shared across all tickers)
+        trader_data = results.get("trader", {})
+        trader_orders = trader_data.get("orders", [])
+        trader_method = trader_data.get("sizing_method_chosen", "N/A")
+        trader_rationale = trader_data.get("overall_rationale", "")
+        trader_error = trader_data.get("error")
+
         # Build the UI display for each ticker
         ticker_tabs = []
         for ticker in tickers:
@@ -131,12 +138,59 @@ def run_analysis_ui(n_clicks, ticker_text):
                 ])
             ], color="secondary", outline=True)
 
+            # Trader Agent — Trade Order for this ticker (embedded per-ticker in results)
+            order = data.get("trade_order")
+
+            if trader_error:
+                trader_body = html.P(f"Error: {trader_error}", className="text-danger small")
+            elif order:
+                action = order.get("action", "N/A")
+                action_color = "success" if action == "BUY" else "danger" if action == "SELL" else "warning"
+                proposed_w = order.get("proposed_weight", 0)
+                delta_w = order.get("weight_delta", 0)
+                delta_color = "text-success" if delta_w >= 0 else "text-danger"
+                trader_body = html.Div([
+                    html.Div([
+                        html.Span(action, className=f"badge bg-{action_color} fs-5 me-3"),
+                        html.Span(f"Target weight: {proposed_w:.1%}", className="text-info me-3"),
+                        html.Span(
+                            f"Delta: {delta_w:+.1%}",
+                            className=f"{delta_color} me-3"
+                        ),
+                        html.Span(
+                            f"Method: {order.get('sizing_method_used', 'N/A')}",
+                            className="text-muted small"
+                        ),
+                    ], className="mb-2"),
+                    html.P(order.get("rationale", ""), className="small text-muted fst-italic"),
+                ])
+            else:
+                trader_body = html.P("No trade order generated for this ticker.", className="text-muted small")
+
+            trader_panel = dbc.Card([
+                dbc.CardHeader(html.Div([
+                    html.H5("Trader Agent", className="mb-0 d-inline me-3"),
+                    html.Span(
+                        f"Sizing: {trader_method}",
+                        className="badge bg-primary small"
+                    ),
+                ])),
+                dbc.CardBody([
+                    trader_body,
+                    html.Hr(className="my-2"),
+                    html.P(trader_rationale, className="small text-muted") if trader_rationale else None,
+                ])
+            ], color="primary", outline=True)
+
             ticker_tabs.append(dbc.Tab(label=ticker, children=[
                 html.Div([
                     summary_card,
                     dbc.Row([
                         dbc.Col(tech_panel, md=6),
                         dbc.Col(sent_panel, md=6),
+                    ], className="mb-3"),
+                    dbc.Row([
+                        dbc.Col(trader_panel, md=12),
                     ])
                 ], className="mt-3")
             ]))
