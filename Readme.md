@@ -1,101 +1,88 @@
-# Trading-Agent (Technical + Sentiment Analysis)
+# Trading-Agent (LLM Multi-Agent Financial System)
 
-A unified stock analysis platform that combines **Technical Analysis** (LangGraph-based indicators and signals) with **Multi-Agent Sentiment Analysis** (News, Social Media, Analyst Consenus, and Web Search).
+A unified autonomous stock analysis and portfolio allocation platform. The system leverages an orchestrator to run parallel domain-expert LLM agents (Technical, Sentiment, and Fundamental Analysis), synthesizes their findings into a cohesive narrative, and passes the intelligence to a Trader Agent which sizes positions via mathematical models dynamically checked by a Portfolio Validator.
+
+![High-Level Pipeline Architecture](./results/pipeline_overview_1772344690319.png)
 
 ## 🚀 Quick Start
 
 1. **Install Dependencies**
-   Ensure you have Python 3.12+ installed.
+   The project uses `uv` for package management, but pip can be used with the included `pyproject.toml`.
    ```bash
-   python3.12 -m venv venv
-   source venv/bin/activate
-   pip install -r pyproject.toml # or just use the pre-installed venv
+   python3 -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements.txt # or uv sync
    ```
 
 2. **Run Full Analysis**
-   The unified orchestrator runs both technical and sentiment agents and saves a combined JSON report.
+   The orchestrator runs the full pipeline for multiple tickers.
    ```bash
-   PYTHONPATH=. ./venv/bin/python3 run_analysis.py --tickers AAPL,MSFT
+   python run_analysis.py --tickers AAPL,NVDA,MSFT
    ```
 
 3. **Run the Dashboard (UI)**
-   Launch the visual interface to perform analysis and view recommendations.
+   Launch the visual interface to see live analysis run, view indicators, and inspect final portfolio allocation.
    ```bash
-   PYTHONPATH=. ./venv/bin/python3 dashboard.py
+   python dashboard.py
    ```
    Open `http://localhost:8050` in your browser.
 
-## 🛠️ Components
+## 🛠️ The Agents
 
 ### 1. Technical Analyst Agent
-- Fetches OHLCV data and computes 60+ indicators (RSI, MACD, Bollinger Bands, etc.).
-- Generates rule-based signals and optional LLM-driven summaries.
-- Supports **Ollama**, **Gemini**, and **Groq**.
+- Fetches OHLCV data and computes comprehensive indicators (Dual RSI, MACD, Bollinger Bands, ATR, Supertrend, etc.).
+- Evaluates 12+ standard mathematical signals dynamically.
+- Automatically handles overbought/oversold boundaries dynamically for volatile tech stocks.
 
 ### 2. Multi-Agent Sentiment Agent
-- A sequential LangGraph pipeline that scrapes and analyzes:
-  - **News**: Recent headlines from Finviz/Yahoo.
-  - **Social**: Reddit buzz via ApeWisdom.
-  - **Analysts**: Institutional consensus via Finnhub.
-  - **Web**: Recent articles via DuckDuckGo.
-- Uses a weighted aggregator and a Bull vs. Bear debate agent to reach a final sentiment score.
+- A sequential *LangGraph* pipeline designed to respect free-tier API rate limits.
+- Incorporates and scores data from:
+  - **News**: Global headlines (Finviz, Yahoo).
+  - **Social**: Reddit keyword buzz (ApeWisdom).
+  - **Analysts**: Wall Street Ratings (Finnhub).
+  - **Web**: General blog/context searches (DuckDuckGo).
+- Uses a weighted aggregator (Analyst 40%, News 35%, Social 15%, Web 10%).
 
-### 3. Summarizer Agent
-- A high-level synthesis agent that takes the technical and sentiment results and provides a final natural-language recommendation (Buy/Hold/Sell) using the LLM.
+### 3. Fundamentals Agent
+- Fetches primary financial statements from `yfinance` with AlphaVantage fallback.
+- Computes core ratios (P/E, Profit Margins, Debt/Equity).
+- Serves as the ultimate quality gate via the **9-criterion Piotroski F-Score**. Any stock scoring <= 2 is hard-overridden to HOLD.
 
-### 4. Dash UI
-- A premium, dark-mode dashboard built with Dash and Bootstrap.
-- Allows ticker-based analysis triggering and visual result inspection.
+### 4. Summarizer Agent
+- A sophisticated LLM synthesize node that ingests the conflicting numerical and text signals from the previous three agents to build a human-readable recommendation card.
 
+### 5. Trader Agent & Portfolio Validator
+- Acts as the portfolio manager. Translates textual "Conviction" and "Expected Return" into quantitative inputs.
+- Chooses dynamically from four position sizing algorithms: *Equal Weight, Conviction Weight, Volatility Parity, and Half-Kelly (Kelly Criterion)*.
+- The **Portfolio Validator** strictly enforces a 40% single-asset cap and guarantees a 10% uninvested cash floor.
 
-## ⚙️ Configuration (LLM Setup)
+## ⚙️ Configuration (.env)
 
-Create a `.env` file in the project root. Both agents share these settings.
+Create a `.env` file in the project root. The system primarily relies on Groq for Trader logic and Gemini for Sentiment scoring, though both can be globally re-mapped.
 
-### Possible LLM Providers
-| Provider | `LLM_PROVIDER` Value | Required Key | Default Model |
-|----------|----------------------|--------------|---------------|
-| **Groq** | `groq` | `GROQ_API_KEY` | `llama-3.3-70b-versatile` |
-| **Gemini** | `gemini` | `GEMINI_API_KEY` | `gemini-2.0-flash` |
-| **Ollama** | `ollama` | (None) | `llama3.1:8b` |
-
-### Example `.env`
 ```env
-# --- LLM Provider ---
+# --- Main Providers ---
 LLM_PROVIDER=groq
-
-# --- API Keys ---
 GROQ_API_KEY=your_groq_key
-GEMINI_API_KEY=your_gemini_key
-FINNHUB_API_KEY=your_finnhub_key
-
-# --- Model Names ---
 GROQ_MODEL=llama-3.3-70b-versatile
-GEMINI_MODEL=gemini-2.0-flash
-OLLAMA_MODEL=llama3.1:8b
-OLLAMA_BASE_URL=http://localhost:11434
 
-# --- Sentiment Agent Weights ---
-WEIGHT_NEWS=0.35
-WEIGHT_SOCIAL=0.25
-WEIGHT_ANALYST=0.25
-WEIGHT_WEB=0.15
+GEMINI_API_KEY=your_gemini_key
+GEMINI_MODEL=gemini-2.0-flash
+
+# --- Data APIS ---
+FINNHUB_API_KEY=your_finnhub_key
+ALPHAVANTAGE_API_KEY=your_alphavantage_key
+
+# --- Configs ---
+LANGCHAIN_TRACING_V2=true 
+LANGCHAIN_API_KEY=your_langsmith_key
 ```
 
 ## 📊 Output
-Results are saved as JSON files in the `./results/` directory with the following structure:
-```json
-{
-  "results": {
-    "AAPL": {
-      "technical": { "indicators": {...}, "signals": [...], "summary": "..." },
-      "sentiment": { "sentiment_score": 0.42, "sentiment_label": "POSITIVE", ... }
-    }
-  }
-}
-```
+Results are saved as JSON cache files in the `./results/` directory, while logs output directly into the stream. When using `dashboard.py`, visually formatted grids and progress bars are available. 
 
-## 🧪 Advanced Usage
-You can still run components individually:
-- **Technical Agent CLI**: `python3 -m technical_agent.cli --tickers AAPL`
-- **Sentiment Agent CLI**: `python3 sentiment_agent/main.py --ticker AAPL`
+## 📝 Document Generation
+An academic interim report and conversion script (`convert_to_docx.py`) are included to generate comprehensive `.docx` reports utilizing the `results/` workflow diagrams generated by Nano Banano.
+```bash
+python convert_to_docx.py
+```
