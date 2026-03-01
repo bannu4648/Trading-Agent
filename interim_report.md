@@ -67,7 +67,7 @@ The four position sizing methods we offer, equal weight, conviction weight, vola
 
 The system follows a sequential pipeline orchestrated by `run_analysis.py`. The orchestrator invokes each agent in order: technical analysis runs first, followed by per-ticker sentiment and fundamentals analysis, LLM synthesis, trading decisions, and finally portfolio validation.
 
-![High-Level Pipeline Architecture](/Users/varun/Desktop/FYP_Project/Trading-Agent/results/pipeline_overview_1772344690319.png)
+![High-Level Pipeline Architecture](/Users/varun/Desktop/FYP_Project/Trading-Agent/results/pipeline_overview_v3_1772354485571.png)
 
 **Figure 1.** The full pipeline. The Orchestrator triggers the three analysis agents in parallel (per ticker), feeds their outputs to the Summarizer for LLM synthesis, then passes everything to the Trader Agent for position sizing. The Portfolio Validator runs final constraint checks before the results are saved.
 
@@ -75,7 +75,7 @@ The system follows a sequential pipeline orchestrated by `run_analysis.py`. The 
 
 The Technical Agent executes a four-node LangGraph pipeline (`fetch_data` → `indicators` → `signals` → `summary`). It computes a comprehensive suite of indicators using `pandas-ta`, including standard moving averages (SMA, EMA), oscillators (MACD, Stochastic), and trend indicators (ADX, Supertrend, Ichimoku Cloud). Crucially, the system employs an adaptive dual-period RSI configuration (periods 9 and 14) with dynamically adjusted overbought/oversold thresholds of 75/25, respectively. This departure from the traditional 70/30 thresholds reduces false-positive signals in highly volatile technology stocks. The agent evaluates twelve distinct rule-based mathematical signals, such as Donchian Channel breakouts and Parabolic SAR (PSAR) directional flips, and synthesizes these into a cohesive posture using either a configured LLM or deterministic rule-based fallbacks.
 
-![Technical Agent Workflow](/Users/varun/Desktop/FYP_Project/Trading-Agent/results/technical_workflow_1772345216266.png)
+![Technical Agent Workflow](/Users/varun/Desktop/FYP_Project/Trading-Agent/results/technical_workflow_v3_1772354500003.png)
 
 **Figure 2.** Technical Agent internal workflow displaying the computational pipeline from data ingestion to mathematical signal extraction.
 
@@ -85,7 +85,7 @@ The sentiment pipeline is implemented as an eight-node, explicitly sequential La
 
 The pipeline collects data from four primary channels: financial news (Finviz and Yahoo Finance scraping), social media (Reddit buzz via ApeWisdom), analyst ratings (Finnhub API), and web search (DuckDuckGo). Following individual LLM scoring, a `debate` node synthesizes a bull-vs-bear argument. Finally, the `AggregatorAgent` fuses these dimensions mathematically using research-backed weights: Analyst Consensus (0.40), Financial News (0.35), Social Media (0.15), and Web Search (0.10). Notably, the web scraper includes a "zero-means-missing" feature; if rate-limited to a 0.0 score, the agent dynamically redistributes the 10% weight to the remaining channels to protect the integrity of the composite score. An analyst confidence floor ensures that strong institutional consensus acts as a stabilizing anchor for the final confidence metric.
 
-![Sentiment Agent Workflow](/Users/varun/Desktop/FYP_Project/Trading-Agent/results/sentiment_workflow_1772344722007.png)
+![Sentiment Agent Workflow](/Users/varun/Desktop/FYP_Project/Trading-Agent/results/sentiment_workflow_v3_1772354529761.png)
 
 **Figure 3.** Sentiment Agent internal workflow. Source weights are configurable and optimized for reliability.
 
@@ -95,7 +95,7 @@ The Fundamentals Agent fetches structured financial statements using a dual-vend
 
 A cornerstone of this agent is its discrete implementation of the 9-criterion Piotroski F-Score (Piotroski, 2000). The agent evaluates nine binary heuristics grouped into three dimensions: profitability (e.g., positive ROA, positive Operating Cash Flow, CFO > ROA), leverage and liquidity (e.g., decreasing debt-to-equity, current ratio > 1.0), and operating efficiency (e.g., positive gross margin, positive asset turnover). The resultant sum dictates a hard categorical rating (Strong, Average, Weak). Crucially, this score acts as an algorithmic quality gate: any company scoring an F-Score of 2 or below has any generated "BUY" signals actively overridden to "HOLD", serving as built-in protection against value traps and distressed equities.
 
-![Fundamentals Agent Workflow](/Users/varun/Desktop/FYP_Project/Trading-Agent/results/fundamentals_workflow_1772344749415.png)
+![Fundamentals Agent Workflow](/Users/varun/Desktop/FYP_Project/Trading-Agent/results/fundamentals_workflow_v3_1772354631305.png)
 
 **Figure 4.** Fundamentals Agent workflow showcasing the F-Score quality gate mechanism.
 
@@ -107,7 +107,7 @@ For position sizing, the agent dynamically selects between four implementations 
 
 Finally, the `PortfolioValidator` operates as an independent post-processing compliance layer. Inspired by constraints from FINCON (Yu et al., 2024), it enforces absolute arithmetic boundaries: a maximum single-position cap of 40%, and a maximum aggregate portfolio exposure of 90% (ensuring a permanent 10% tactical cash floor).
 
-![Trader Agent Workflow](/Users/varun/Desktop/FYP_Project/Trading-Agent/results/trader_workflow_1772344782855.png)
+![Trader Agent Workflow](/Users/varun/Desktop/FYP_Project/Trading-Agent/results/trader_workflow_v3_1772354647563.png)
 
 **Figure 5.** Trader Agent and Portfolio Validator integration, enforcing stringent risk controls prior to order generation.
 
