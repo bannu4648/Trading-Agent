@@ -1,21 +1,10 @@
 """
-Adapter: converts Trading-Agent pipeline output → Trader Agent input schema.
+Converts the pipeline's combined output (technical + sentiment + fundamentals)
+into the schema the Trader Agent expects (signal, conviction, expected_return, volatility).
 
-The existing pipeline produces three things per ticker:
-  - technical:  signals (direction/strength), indicators (ATR, Bollinger Bands, price)
-  - sentiment:  sentiment_score, confidence, debate (bull_case / bear_case / resolution)
-  - synthesis:  plain Markdown string — the Summarizer's final recommendation
-
-Interpretation approach:
-  signal, conviction_score, expected_return
-      → LLM call that reads the synthesis narrative, sentiment debate, and technical
-        signals together.  Falls back to formulas if the LLM call fails.
-
-  volatility
-      → Always derived from ATR / Bollinger Bands (requires real price data;
-        an LLM must not estimate this).
+LLM is used for signal/conviction/expected_return — falls back to formulas on API failure.
+Volatility is always formula-derived (ATR/Bollinger Bands) — never ask an LLM to guess this.
 """
-
 from __future__ import annotations
 
 import json
@@ -32,9 +21,135 @@ from .models import ResearchTeamOutput, StockRecommendation
 
 logger = logging.getLogger(__name__)
 
-_MAX_EXP_RETURN  =  0.25
-_MIN_EXP_RETURN  = -0.25
-_DEFAULT_VOLATILITY = 0.25
+# Clamp expected return to something sensible — LLMs sometimes go wild
+_MAX_EXP_RETURN     =  0.25
+_MIN_EXP_RETURN     = -0.25
+_DEFAULT_VOLATILITY =  0.25  # fallback if ATR/BB data is missing
+
+
+# ---------------------------------------------------------------------------
+# Fundamentals helpers
+# ---------------------------------------------------------------------------
+
+def _parse_pct(val: str | None) -> float | None:
+    """Parse a percentage string like '20.50%' into 0.205. Returns None on failure."""
+    if val is None or val == "N/A":
+        return None
+    try:
+        s = str(val).replace("%", "").replace(",", "").strip()
+        return float(s) / 100.0
+    except (ValueError, TypeError):
+        return None
+
+
+def _parse_ratio(val: str | None) -> float | None:
+    """Parse a ratio string like '3.45' into a float. Returns None on failure."""
+    if val is None or val == "N/A":
+        return None
+    try:
+        s = str(val).replace(",", "").replace("$", "").strip()
+        return float(s)
+    except (ValueError, TypeError):
+        return None
+
+
+def _fundamentals_quality_score(fundamentals: dict[str, Any]) -> float:
+    """
+    Return a -1.0 to +1.0 adjustment based on financial quality.
+    Positive = strong fundamentals, negative = weak.
+    """
+    score = 0.0
+    checks = 0
+
+    # ROE check: > 15% is good
+    roe = _parse_pct(fundamentals.get("ROE"))
+    if roe is not None:
+        checks += 1
+        score += 0.5 if roe > 0.15 else (-0.3 if roe < 0.05 else 0.0)
+
+    # Profit margin check
+    margin = _parse_pct(fundamentals.get("Profit Margin"))
+    if margin is not None:
+        checks += 1
+        score += 0.3 if margin > 0.15 else (-0.3 if margin < 0 else 0.0)
+
+    # Revenue growth check
+    rev_growth = _parse_pct(fundamentals.get("Revenue Growth"))
+    if rev_growth is not None:
+        checks += 1
+        score += 0.3 if rev_growth > 0.05 else (-0.2 if rev_growth < 0 else 0.0)
+
+    # Debt/Equity check: < 1.0 is healthy
+    de = _parse_ratio(fundamentals.get("Debt/Equity"))
+    if de is not None:
+        checks += 1
+        score += 0.2 if de < 100 else (-0.3 if de > 200 else 0.0)  # yfinance reports as %
+
+    return max(-1.0, min(1.0, score))
+
+
+# Fields we send to the LLM — keeping this short matters because we're
+# hitting a token-limited free API and more context = more rate limit pain
+_COMPACT_FUNDAMENTALS_KEYS = [
+    "P/E Ratio", "Forward P/E", "PEG Ratio",
+    "Profit Margin", "Operating Margin",
+    "ROE", "ROA",
+    "Current Ratio", "Debt/Equity",
+    "Revenue Growth", "Earnings Growth",
+    "Market Cap", "Piotroski F-Score",
+]
+
+
+def _parse_pct(val: str | None) -> float | None:
+    """'20.50%' → 0.205. Returns None if the value is missing or can't be parsed."""
+    if val is None or val == "N/A":
+        return None
+    try:
+        return float(str(val).replace("%", "").replace(",", "").strip()) / 100.0
+    except (ValueError, TypeError):
+        return None
+
+
+def _parse_ratio(val: str | None) -> float | None:
+    """'3.45' → 3.45. Returns None on failure."""
+    if val is None or val == "N/A":
+        return None
+    try:
+        return float(str(val).replace(",", "").replace("$", "").strip())
+    except (ValueError, TypeError):
+        return None
+
+
+def _fundamentals_quality_score(fund: dict[str, Any]) -> float:
+    """
+    Quick heuristic: turns fundamental ratios into a -1.0 to +1.0 score.
+    Used to nudge formula-based conviction when we don't have an LLM call.
+    """
+    score = 0.0
+
+    # Decent ROE means the company is generating good returns on equity
+    roe = _parse_pct(fund.get("ROE"))
+    if roe is not None:
+        score += 0.5 if roe > 0.15 else (-0.3 if roe < 0.05 else 0.0)
+
+    margin = _parse_pct(fund.get("Profit Margin"))
+    if margin is not None:
+        score += 0.3 if margin > 0.15 else (-0.3 if margin < 0 else 0.0)
+
+    rev_growth = _parse_pct(fund.get("Revenue Growth"))
+    if rev_growth is not None:
+        score += 0.3 if rev_growth > 0.05 else (-0.2 if rev_growth < 0 else 0.0)
+
+    # yfinance gives D/E as a percentage (e.g. 102 = 102%), so < 100 is healthy
+    de = _parse_ratio(fund.get("Debt/Equity"))
+    if de is not None:
+        score += 0.2 if de < 100 else (-0.3 if de > 200 else 0.0)
+
+    return max(-1.0, min(1.0, score))
+
+
+def _compact_fundamentals(fund: dict[str, Any]) -> dict[str, str]:
+    return {k: fund.get(k, "N/A") for k in _COMPACT_FUNDAMENTALS_KEYS}
 
 
 # ---------------------------------------------------------------------------
@@ -47,6 +162,7 @@ You will receive a research package for a single stock containing:
   1. synthesis     — the Summarizer Agent's final recommendation (Markdown)
   2. sentiment     — sentiment score, confidence, bull/bear debate, resolution
   3. tech_signals  — list of technical signals with direction and strength
+  4. fundamentals  — key financial metrics: P/E, ROE, margins, growth, valuation ratios
 
 Your job: extract three fields as a JSON object, nothing else.
 
@@ -56,18 +172,23 @@ Rules:
     If the synthesis says "Avoid", "Sell", or "Do not buy" → SELL.
     If the synthesis says "Buy", "Accumulate", "Go long" → BUY.
     If the synthesis says "Hold", "Watch", "Neutral", or is ambiguous → HOLD.
+    Use fundamentals as a quality check: strong fundamentals (low P/E, high ROE, positive
+    revenue growth) should increase conviction for BUY; weak fundamentals should lower it.
     Only use technical / sentiment as tiebreaker when the synthesis is genuinely unclear.
 
 - conviction_score: float 0.0–10.0
     How strongly does the evidence support the chosen signal?
-    Consider: agreement between synthesis/technical/sentiment, signal strength values,
-    sentiment confidence, clarity of the bull/bear debate resolution.
+    Consider: agreement between synthesis/technical/sentiment/fundamentals, signal strength
+    values, sentiment confidence, clarity of the bull/bear debate resolution.
+    Fundamentals adjustment: if P/E is reasonable and ROE > 15%, add +1 to conviction.
+    If debt/equity is very high or margins are negative, subtract -1.
     Low conviction (2–4): conflicting signals, weak evidence.
     Medium conviction (5–7): moderate agreement, some uncertainty.
     High conviction (8–10): strong multi-source agreement, clear direction.
 
 - expected_return: float, annualised, typically in range −0.25 to +0.25
     Your best estimate of the stock's annualised return given all the evidence.
+    Factor in revenue/earnings growth rates from fundamentals.
     Positive for BUY signals, negative for SELL signals.
     Scale with conviction — a weak BUY might be +0.03, a strong BUY might be +0.18.
     SELL signals should be negative (e.g. −0.05 to −0.20).
@@ -85,6 +206,7 @@ def _llm_interpret(
     synthesis: str,
     sentiment: dict[str, Any],
     tech: dict[str, Any],
+    fundamentals: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """
     Call the LLM to extract signal, conviction_score and expected_return from
@@ -115,6 +237,7 @@ def _llm_interpret(
             "resolution": debate.get("resolution", ""),
         },
         "tech_signals": tech_signals,
+        "fundamentals": _compact_fundamentals(fundamentals or {}),
     }
 
     human_text = (
@@ -199,14 +322,23 @@ def _formula_signal(tech: dict[str, Any], sentiment: dict[str, Any], synthesis: 
     return "HOLD"
 
 
-def _formula_conviction(tech: dict[str, Any], sentiment: dict[str, Any]) -> float:
+def _formula_conviction(tech: dict[str, Any], sentiment: dict[str, Any],
+                        fundamentals: dict[str, Any] | None = None) -> float:
     signals = tech.get("signals", [])
     avg_strength = (sum(s.get("strength", 0.5) for s in signals) / len(signals)) if signals else 0.5
     sent_confidence = float(sentiment.get("confidence", 0.5))
-    return round(((avg_strength + sent_confidence) / 2.0) * 10.0, 2)
+    base = ((avg_strength + sent_confidence) / 2.0) * 10.0
+
+    # Fundamentals adjustment: boost conviction for quality companies
+    if fundamentals:
+        adj = _fundamentals_quality_score(fundamentals)
+        base += adj  # adj is in [-1, +1] range
+
+    return round(max(0.0, min(10.0, base)), 2)
 
 
-def _formula_expected_return(tech: dict[str, Any], sentiment: dict[str, Any]) -> float:
+def _formula_expected_return(tech: dict[str, Any], sentiment: dict[str, Any],
+                             fundamentals: dict[str, Any] | None = None) -> float:
     signals = tech.get("signals", [])
     direction_map = {"bullish": 1.0, "neutral": 0.0, "bearish": -1.0}
     avg_dir = (
@@ -215,6 +347,13 @@ def _formula_expected_return(tech: dict[str, Any], sentiment: dict[str, Any]) ->
     )
     base = avg_dir * 0.20
     adjusted = base + float(sentiment.get("sentiment_score", 0.0)) * 0.05
+
+    # Factor in revenue growth from fundamentals
+    if fundamentals:
+        rev_growth = _parse_pct(fundamentals.get("Revenue Growth", "N/A"))
+        if rev_growth is not None:
+            adjusted += rev_growth * 0.10  # e.g. 20% revenue growth adds +0.02
+
     return float(max(_MIN_EXP_RETURN, min(_MAX_EXP_RETURN, adjusted)))
 
 
@@ -266,19 +405,9 @@ def build_research_output(
 
     For each ticker:
       - Calls the LLM to interpret signal / conviction / expected_return from
-        the synthesis + sentiment debate + technical signals.
+        the synthesis + sentiment debate + technical signals + fundamentals.
       - Falls back to deterministic formulas if the LLM call fails.
       - Always derives volatility from ATR / Bollinger Bands (formula only).
-
-    Args:
-        combined_results: Full dict from run_full_analysis().
-        current_weights:  Optional existing portfolio weights {ticker: decimal}.
-                          Defaults to 0.0 for all tickers (testing assumption).
-                          Pass real weights during live/FYP portfolio testing so
-                          the Trader Agent produces correct BUY/SELL deltas.
-
-    Returns:
-        ResearchTeamOutput with one StockRecommendation per ticker.
     """
     if current_weights is None:
         current_weights = {}
@@ -287,12 +416,13 @@ def build_research_output(
     recommendations = []
 
     for ticker, data in ticker_results.items():
-        tech      = data.get("technical", {})
-        sentiment = data.get("sentiment", {})
-        synthesis = data.get("synthesis", "")
+        tech         = data.get("technical", {})
+        sentiment    = data.get("sentiment", {})
+        synthesis    = data.get("synthesis", "")
+        fundamentals = data.get("fundamentals", {})
 
         # ── 1. LLM interpretation (signal + conviction + expected_return) ──
-        llm_result = _llm_interpret(ticker, synthesis, sentiment, tech)
+        llm_result = _llm_interpret(ticker, synthesis, sentiment, tech, fundamentals)
 
         if llm_result:
             signal     = llm_result["signal"]
@@ -301,8 +431,8 @@ def build_research_output(
         else:
             # Formula fallback
             signal     = _formula_signal(tech, sentiment, synthesis)
-            conviction = _formula_conviction(tech, sentiment)
-            exp_return = _formula_expected_return(tech, sentiment)
+            conviction = _formula_conviction(tech, sentiment, fundamentals)
+            exp_return = _formula_expected_return(tech, sentiment, fundamentals)
             logger.info(
                 f"[adapter] {ticker}: formula → signal={signal} conviction={conviction:.1f} "
                 f"exp_ret={exp_return:+.1%}"

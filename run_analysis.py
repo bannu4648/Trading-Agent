@@ -1,13 +1,13 @@
 """
-Unified orchestrator — runs both the technical and sentiment agents for the
-same ticker(s) and saves a single combined JSON report.
+Orchestrates the full analysis pipeline for one or more stock tickers.
+
+Runs technical → sentiment → fundamentals → synthesis → trader → validation,
+then writes a single combined JSON to the results folder.
 
 Usage:
-    python run_analysis.py --tickers META
+    python run_analysis.py --tickers AAPL,NVDA
     python run_analysis.py --tickers META,TSLA --output ./results
-    python run_analysis.py --tickers AAPL --start 2025-01-01 --end 2025-06-01
 """
-
 from __future__ import annotations
 
 import argparse
@@ -17,57 +17,63 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
-# ── Technical agent imports ──
+# stdlib above, local project imports below
 from technical_agent.agent import TechnicalAnalystAgent
 from technical_agent.config import AgentConfig, config_from_env
 from technical_agent.shared.serialization import to_serializable
 
-# ── Sentiment agent imports ──
 from sentiment_agent.agents.orchestrator_agent import OrchestratorAgent
 from summarizer_agent import SummarizerAgent
 
-# ── Trader agent imports ──
-from trader_agent.node import run_trader_for_pipeline
+from fundamentals_agent.tools import fetch_fundamentals_data
 
-# ── Logging ──
+from trader_agent.node import run_trader_for_pipeline
+from trader_agent.adapter import build_research_output
+
+from portfolio_validator import PortfolioValidator
+
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%H:%M:%S",
 )
-logger = logging.getLogger("unified_orchestrator")
+logger = logging.getLogger("orchestrator")
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Agent runner helpers — thin wrappers so the main function stays readable
 # ---------------------------------------------------------------------------
 
-def _build_tech_config() -> AgentConfig:
-    """
-    Build config for the technical agent from environment variables.
-    Now that Groq is supported in the LLM factory, we just use
-    config_from_env() which reads LLM_PROVIDER / GROQ_API_KEY from .env.
-    """
-    return config_from_env()
-
-
-def _run_technical(tickers: List[str], start: str | None,
-                   end: str | None, interval: str) -> Dict[str, Any]:
-    """Run the technical agent and return its result dict."""
-    logger.info("── Technical analysis ──")
-    config = _build_tech_config()
-    agent = TechnicalAnalystAgent(config=config)
-    return agent.run(tickers, start_date=start, end_date=end, interval=interval)
+def _run_technical(
+    tickers: List[str],
+    start: str | None,
+    end: str | None,
+    interval: str,
+) -> Dict[str, Any]:
+    logger.info("[orchestrator] Running technical analysis")
+    config = config_from_env()
+    return TechnicalAnalystAgent(config=config).run(
+        tickers, start_date=start, end_date=end, interval=interval
+    )
 
 
 def _run_sentiment(ticker: str) -> Dict[str, Any]:
-    """Run the sentiment agent for a single ticker."""
-    logger.info(f"── Sentiment analysis for {ticker} ──")
+    logger.info(f"[orchestrator] Sentiment → {ticker}")
     return OrchestratorAgent().run(ticker)
 
 
+def _run_fundamentals(ticker: str) -> Dict[str, Any]:
+    logger.info(f"[orchestrator] Fundamentals → {ticker}")
+    try:
+        return fetch_fundamentals_data(ticker, try_alpha_vantage=False)
+    except Exception as exc:
+        logger.error(f"[orchestrator] Fundamentals failed for {ticker}: {exc}")
+        return {}
+
+
 # ---------------------------------------------------------------------------
-# Main logic
+# Main pipeline
 # ---------------------------------------------------------------------------
 
 def run_full_analysis(
@@ -77,16 +83,21 @@ def run_full_analysis(
     interval: str = "1d",
     output_dir: str = "./results",
 ) -> Dict[str, Any]:
-    """Run both agents and merge their outputs into one JSON file."""
+    """
+    Full pipeline: technical → sentiment → fundamentals → synthesis →
+    trader → portfolio validation → save JSON.
 
-    # 1. Technical analysis (handles all tickers in one batch)
-    tech_output = {}
+    Returns the combined results dict (same thing that gets saved).
+    """
+
+    # --- Step 1: Technical (batched for all tickers at once) ---
+    tech_output: Dict[str, Any] = {}
     try:
         tech_output = _run_technical(tickers, start_date, end_date, interval)
     except Exception as exc:
-        logger.error(f"Technical analysis failed: {exc}")
+        logger.error(f"[orchestrator] Technical analysis failed: {exc}")
 
-    # 2. Per-ticker sentiment analysis + merge
+    # Seed the combined dict — everything gets merged into this
     combined: Dict[str, Any] = {
         "metadata": {
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -95,45 +106,50 @@ def run_full_analysis(
         "results": {},
     }
 
+    # --- Step 2: Per-ticker sentiment + fundamentals ---
     for ticker in tickers:
-        logger.info(f"Processing {ticker} …")
+        logger.info(f"[orchestrator] Processing {ticker}")
 
-        # Extract technical result for this ticker
         ticker_tech = tech_output.get("tickers", {}).get(ticker, {})
 
-        # Sentiment
         ticker_sentiment: Dict[str, Any] = {}
         try:
             ticker_sentiment = _run_sentiment(ticker)
         except Exception as exc:
-            logger.error(f"Sentiment analysis failed for {ticker}: {exc}")
+            logger.error(f"[orchestrator] Sentiment failed for {ticker}: {exc}")
+
+        ticker_fundamentals: Dict[str, Any] = {}
+        try:
+            ticker_fundamentals = _run_fundamentals(ticker)
+        except Exception as exc:
+            logger.error(f"[orchestrator] Fundamentals failed for {ticker}: {exc}")
 
         combined["results"][ticker] = {
             "technical": ticker_tech,
             "sentiment": ticker_sentiment,
+            "fundamentals": ticker_fundamentals,
         }
 
-    # 3. Final Synthesis (per-ticker summary)
-    logger.info("── Final Synthesis ──")
+    # --- Step 3: Synthesis (one LLM call per ticker) ---
+    logger.info("[orchestrator] Running synthesis")
     summarizer = SummarizerAgent()
     for ticker in tickers:
         try:
-            summary = summarizer.run(ticker, combined)
-            combined["results"][ticker]["synthesis"] = summary
+            combined["results"][ticker]["synthesis"] = summarizer.run(ticker, combined)
         except Exception as exc:
-            logger.error(f"Synthesis failed for {ticker}: {exc}")
+            logger.error(f"[orchestrator] Synthesis failed for {ticker}: {exc}")
             combined["results"][ticker]["synthesis"] = "Synthesis unavailable."
 
-    # 4. Trader Agent — position sizing and trade order proposals
-    logger.info("── Trader Agent ──")
+    # --- Step 4: Trader agent (position sizing + order proposals) ---
+    logger.info("[orchestrator] Running trader agent")
     try:
         trader_result = run_trader_for_pipeline(combined)
 
-        # Embed each ticker's order directly into its result dict
+        # Flatten each order into the per-ticker result for easy dashboard access
         for order in trader_result.get("orders", []):
-            ticker = order.get("ticker")
-            if ticker and ticker in combined["results"]:
-                combined["results"][ticker]["trade_order"] = {
+            t = order.get("ticker")
+            if t and t in combined["results"]:
+                combined["results"][t]["trade_order"] = {
                     "action":             order.get("action"),
                     "proposed_weight":    order.get("proposed_weight"),
                     "weight_delta":       order.get("weight_delta"),
@@ -141,7 +157,6 @@ def run_full_analysis(
                     "rationale":          order.get("rationale"),
                 }
 
-        # Keep top-level summary (method choice, overall rationale, total invested)
         combined["trader"] = {
             "sizing_method_chosen": trader_result.get("sizing_method_chosen"),
             "overall_rationale":    trader_result.get("overall_rationale"),
@@ -149,40 +164,65 @@ def run_full_analysis(
         }
 
         logger.info(
-            f"Trader Agent complete. "
+            f"[orchestrator] Trader done — "
             f"method={trader_result.get('sizing_method_chosen', 'unknown')} "
             f"orders={len(trader_result.get('orders', []))}"
         )
     except Exception as exc:
-        logger.error(f"Trader Agent failed: {exc}")
+        logger.error(f"[orchestrator] Trader agent failed: {exc}")
         combined["trader"] = {"error": str(exc)}
 
-    # 5. Save
-    os.makedirs(output_dir, exist_ok=True)
-    safe_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
-    tickers_tag = "_".join(tickers[:5])
-    output_file = os.path.join(output_dir, f"{tickers_tag}_{safe_ts}.json")
+    # --- Step 5: Portfolio validation (no LLM, just constraint checks) ---
+    logger.info("[orchestrator] Running portfolio validation")
+    try:
+        all_orders = [
+            {"ticker": t, **combined["results"][t]["trade_order"]}
+            for t in tickers
+            if "trade_order" in combined["results"].get(t, {})
+        ]
 
-    with open(output_file, "w", encoding="utf-8") as fh:
+        # Rebuild minimal recommendation list for the validator
+        all_recs = [
+            {"ticker": r.ticker, "conviction_score": r.conviction_score,
+             "volatility": r.volatility, "signal": r.signal}
+            for r in build_research_output(combined).recommendations
+        ]
+
+        validation = PortfolioValidator().validate(all_orders, all_recs)
+        combined["risk_report"] = validation
+
+        level = validation["risk_level"]
+        logger.info(f"[orchestrator] Validation: {level} — {len(validation['warnings'])} warning(s)")
+        for w in validation["warnings"]:
+            logger.warning(f"[orchestrator] ⚠️  {w}")
+
+    except Exception as exc:
+        logger.error(f"[orchestrator] Portfolio validation failed: {exc}")
+        combined["risk_report"] = {"risk_level": "UNKNOWN", "warnings": [str(exc)], "metrics": {}}
+
+    # --- Step 6: Save to disk ---
+    os.makedirs(output_dir, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
+    out_path = os.path.join(output_dir, f"{'_'.join(tickers[:5])}_{ts}.json")
+
+    with open(out_path, "w", encoding="utf-8") as fh:
         json.dump(combined, fh, default=to_serializable, indent=2)
 
-    logger.info(f"✅ Combined analysis saved to: {output_file}")
+    logger.info(f"[orchestrator] ✅ Saved → {out_path}")
     return combined
 
 
 # ---------------------------------------------------------------------------
-# CLI
+# CLI entry point
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Unified Stock Analysis")
-    parser.add_argument("--tickers", "-t", required=True,
-                        help="Comma-separated ticker symbols")
-    parser.add_argument("--start", help="Start date (YYYY-MM-DD)")
-    parser.add_argument("--end", help="End date (YYYY-MM-DD)")
-    parser.add_argument("--interval", default="1d", help="Data interval")
-    parser.add_argument("--output", "-o", default="./results",
-                        help="Output directory")
+    parser = argparse.ArgumentParser(description="Multi-agent stock analysis pipeline")
+    parser.add_argument("--tickers", "-t", required=True, help="Comma-separated tickers e.g. AAPL,NVDA")
+    parser.add_argument("--start",   help="Start date YYYY-MM-DD")
+    parser.add_argument("--end",     help="End date YYYY-MM-DD")
+    parser.add_argument("--interval", default="1d", help="Price interval (1d, 1wk...)")
+    parser.add_argument("--output", "-o", default="./results", help="Output directory")
 
     args = parser.parse_args()
     tickers = [t.strip().upper() for t in args.tickers.split(",") if t.strip()]

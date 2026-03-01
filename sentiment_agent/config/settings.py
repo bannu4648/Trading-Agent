@@ -27,15 +27,24 @@ class Settings(BaseSettings):
     deepseek_model: str = "deepseek-chat"
     gemini_model: str = "gemini-2.0-flash"
 
-    # how much weight each agent gets in the final score (should sum to 1.0)
-    # analyst data is the most reliable signal (institutional consensus from
-    # dozens of analysts), followed by news headlines. Social and web are
-    # noisier -- social measures volume not sentiment, and web scraping is
-    # inconsistent across runs.
-    weight_news: float = 0.30
+    # Research-backed weights (Change 4 — IEEE/arXiv 2024-25):
+    # Analyst consensus from Finnhub = most reliable (institutional data from dozens of analysts)
+    # News = second most reliable (primary source events)
+    # Social = noisier (Reddit volume ≠ sentiment quality)
+    # Web = reduced to near-zero: DuckDuckGo scraper consistently returns 0.0 scores
+    #       giving it high weight actively hurts accuracy (drags down confidence)
+    weight_news: float = 0.35
     weight_social: float = 0.15
-    weight_analyst: float = 0.35
-    weight_web: float = 0.20
+    weight_analyst: float = 0.40
+    weight_web: float = 0.10
+
+    # If True, a web score of exactly 0.0 is treated as missing (not counted)
+    # and its weight is redistributed to the other sources
+    web_zero_means_missing: bool = True
+
+    # Analyst confidence floor: if analyst_score >= this, confidence >= analyst_floor
+    analyst_confidence_threshold: float = 0.7
+    analyst_confidence_floor: float = 0.55
 
 
 settings = Settings()

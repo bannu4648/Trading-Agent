@@ -10,6 +10,10 @@ class AggregatorAgent:
     """
     Takes the raw outputs from each sentiment agent, applies weighted
     averaging, and produces a final score + label + confidence.
+
+    Change 4 improvements:
+    - Web score = 0.0 is treated as missing (weight redistributed to other sources)
+    - Analyst confidence floor: strong analyst consensus boosts minimum confidence
     """
 
     WEIGHT_MAP = {
@@ -32,6 +36,20 @@ class AggregatorAgent:
             weight = getattr(settings, weight_attr, 0.0)
             result = agent_results.get(agent_name, {})
             score = float(result.get("score", 0.0))
+
+            # Web-zero detection: if web consistently returns 0.0 and flag is set,
+            # treat it as missing data and skip (weight redistributed to others)
+            if (agent_name == "web_search"
+                    and score == 0.0
+                    and getattr(settings, "web_zero_means_missing", False)):
+                breakdown[agent_name] = {
+                    "score": 0.0,
+                    "label": result.get("label", "neutral"),
+                    "weight": 0.0,  # excluded
+                    "reasoning": result.get("reasoning", "") or "Excluded: zero score treated as missing data",
+                }
+                continue
+
             composite += score * weight
             total_weight += weight
             breakdown[agent_name] = {
@@ -56,8 +74,6 @@ class AggregatorAgent:
         if len(scores) > 1:
             mean = sum(scores) / len(scores)
             spread = (sum((s - mean) ** 2 for s in scores) / len(scores)) ** 0.5
-            # spread ranges from 0 (perfect agreement) to ~1 (total disagreement)
-            # agreement factor: 1.0 when spread=0, drops toward 0.3 at spread=1
             agreement = max(0.3, 1.0 - spread * 0.7)
         else:
             agreement = 0.5
@@ -65,6 +81,14 @@ class AggregatorAgent:
         # base confidence from signal strength, boosted by agreement
         signal_strength = min(abs(composite) * 1.2, 1.0)
         confidence = round(min((0.3 + signal_strength * 0.7) * agreement, 1.0), 4)
+
+        # Analyst confidence floor (Change 4): strong analyst consensus
+        # guarantees a minimum confidence level even if other signals are weak
+        analyst_score = float(agent_results.get("analyst_buzz", {}).get("score", 0.0))
+        threshold = getattr(settings, "analyst_confidence_threshold", 0.7)
+        floor = getattr(settings, "analyst_confidence_floor", 0.55)
+        if abs(analyst_score) >= threshold:
+            confidence = max(confidence, floor)
 
         return {
             "sentiment_score": composite,
@@ -80,3 +104,4 @@ class AggregatorAgent:
         elif score <= -0.15:
             return "NEGATIVE"
         return "NEUTRAL"
+

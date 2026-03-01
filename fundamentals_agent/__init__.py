@@ -1,25 +1,10 @@
 """
-Fundamentals Agent - A LangGraph-based agent for fundamental stock analysis.
+Fundamentals agent package.
+
+The pipeline only uses fetch_fundamentals_data from tools.py —
+the LangGraph-based FundamentalsAgent class was the original standalone
+version and is not wired into run_analysis.py.
 """
-from .agent import FundamentalsAgent
-from .state import FundamentalsAgentState
-from .config import get_llm_client, DEFAULT_CONFIG
-from .tools import (
-    get_fundamentals,
-    get_balance_sheet,
-    get_cashflow,
-    get_income_statement,
-)
+from .tools import fetch_fundamentals_data
 
-__all__ = [
-    "FundamentalsAgent",
-    "FundamentalsAgentState",
-    "get_llm_client",
-    "DEFAULT_CONFIG",
-    "get_fundamentals",
-    "get_balance_sheet",
-    "get_cashflow",
-    "get_income_statement",
-]
-
-__version__ = "1.0.0"
+__all__ = ["fetch_fundamentals_data"]

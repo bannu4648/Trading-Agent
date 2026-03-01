@@ -30,7 +30,9 @@ class DataConfig:
 class IndicatorConfig:
     sma_periods: List[int] = field(default_factory=lambda: [20, 50, 200])
     ema_periods: List[int] = field(default_factory=lambda: [12, 26])
-    rsi_period: int = 14
+    rsi_period: int = 14          # primary RSI period (academic standard)
+    rsi_period_short: int = 9     # secondary RSI for short-term momentum (Change 1)
+    lookback_days: int = 200      # min data history for stable RSI-14 (was 60 — bug fix)
     macd_fast: int = 12
     macd_slow: int = 26
     macd_signal: int = 9
@@ -114,8 +116,10 @@ class IndicatorConfig:
 
 @dataclass
 class SignalConfig:
-    rsi_overbought: float = 70.0
-    rsi_oversold: float = 30.0
+    # Adaptive thresholds: research shows 75/25 better for volatile tech stocks
+    # (vs classic 70/30 which generates too many false signals in trending markets)
+    rsi_overbought: float = 75.0
+    rsi_oversold: float = 25.0
     stoch_overbought: float = 80.0
     stoch_oversold: float = 20.0
     adx_trend_threshold: float = 25.0

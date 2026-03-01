@@ -1,18 +1,23 @@
 """
-Trader Agent — LangChain ReAct agent powered by Groq.
+Trader Agent — LangGraph ReAct agent powered by Groq.
 
 Reads model configuration from the same .env the rest of the Trading-Agent
 project uses (LLM_PROVIDER, GROQ_API_KEY, GROQ_MODEL).
+
+Uses langgraph.prebuilt.create_react_agent (replaces the deprecated
+langchain AgentExecutor pattern).
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
+import re
 
-from langchain.agents import AgentExecutor, create_tool_calling_agent
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_groq import ChatGroq
+from langchain_core.messages import HumanMessage, SystemMessage
+from langgraph.prebuilt import create_react_agent
 
 from .models import ResearchTeamOutput, TradeOrder, TraderOutput
 from .tools import (
@@ -23,7 +28,6 @@ from .tools import (
     volatility_adjusted_weight,
 )
 
-import logging
 logger = logging.getLogger(__name__)
 
 
@@ -104,9 +108,9 @@ TraderOutput schema:
 TOOLS = [generate_trade_orders]
 
 
-def build_agent_executor(temperature: float = 0.0) -> AgentExecutor:
+def build_react_agent(temperature: float = 0.0):
     """
-    Construct and return the LangChain AgentExecutor for the Trader Agent.
+    Construct and return a LangGraph ReAct agent for the Trader Agent.
 
     Reads model name from GROQ_MODEL env var (set in .env alongside the rest
     of the Trading-Agent project). Falls back to llama-3.3-70b-versatile.
@@ -119,21 +123,13 @@ def build_agent_executor(temperature: float = 0.0) -> AgentExecutor:
         api_key=os.environ.get("GROQ_API_KEY"),
     )
 
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", TRADER_SYSTEM_PROMPT),
-        ("human", "{input}"),
-        MessagesPlaceholder(variable_name="agent_scratchpad"),
-    ])
-
-    agent = create_tool_calling_agent(llm=llm, tools=TOOLS, prompt=prompt)
-
-    return AgentExecutor(
-        agent=agent,
+    agent = create_react_agent(
+        model=llm,
         tools=TOOLS,
-        verbose=True,
-        max_iterations=10,
-        return_intermediate_steps=True,
+        prompt=TRADER_SYSTEM_PROMPT,
     )
+
+    return agent
 
 
 def _extract_json(text: str) -> dict:
@@ -150,7 +146,6 @@ def _extract_json(text: str) -> dict:
         pass
 
     # 2. Strip a leading ```json ... ``` or ``` ... ``` fence
-    import re
     fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     if fence_match:
         try:
@@ -191,7 +186,7 @@ def run_trader_agent(research_output: ResearchTeamOutput) -> TraderOutput:
     Returns:
         A validated TraderOutput Pydantic object ready to be passed to the Risk Manager.
     """
-    executor = build_agent_executor()
+    agent = build_react_agent()
 
     input_payload = json.dumps(research_output.model_dump(), indent=2)
     recommendations_json = json.dumps(research_output.model_dump())
@@ -217,8 +212,19 @@ def run_trader_agent(research_output: ResearchTeamOutput) -> TraderOutput:
         f"4. Return your final response as a JSON object matching the TraderOutput schema."
     )
 
-    result = executor.invoke({"input": user_message})
-    raw_output: str = result["output"]
+    # invoke the ReAct agent — it returns {"messages": [...]}
+    result = agent.invoke({"messages": [HumanMessage(content=user_message)]})
+
+    # The final AI message is the last message in the messages list
+    messages = result.get("messages", [])
+    raw_output = ""
+    for msg in reversed(messages):
+        if hasattr(msg, "content") and msg.content and isinstance(msg.content, str):
+            raw_output = msg.content
+            break
+
+    if not raw_output:
+        raise ValueError("Trader Agent did not produce an output message.")
 
     output_dict = _extract_json(raw_output)
 

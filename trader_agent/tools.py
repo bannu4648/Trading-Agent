@@ -11,6 +11,11 @@ Tools:
   3. volatility_adjusted_weight — risk-parity: inversely proportional to volatility
   4. kelly_criterion_weight     — Kelly fraction based on win-prob and payoff
   5. generate_trade_orders      — computes delta orders given targets vs current weights
+
+Portfolio Constraints (Change 3 — FINCON/fractional-Kelly research):
+  - MAX_SINGLE_POSITION = 40% (no more than 40% in any one stock)
+  - MAX_INVESTED        = 90% (always keep at least 10% cash buffer)
+  - These prevent catastrophic losses from overconcentration
 """
 
 from __future__ import annotations
@@ -19,6 +24,11 @@ import json
 import math
 
 from langchain_core.tools import tool
+
+# Portfolio safety constraints (research-backed)
+_MAX_SINGLE_POSITION = 0.40  # Never more than 40% in one stock
+_MAX_INVESTED = 0.90          # Always keep ≥10% cash
+_MIN_POSITION = 0.005         # Positions below 0.5% are rounded to 0
 
 
 def _parse_recs(recs_json: str) -> list[dict]:
@@ -29,12 +39,47 @@ def _parse_recs(recs_json: str) -> list[dict]:
     return data
 
 
+def _apply_portfolio_constraints(weights: dict[str, float]) -> dict[str, float]:
+    """
+    Apply portfolio safety constraints inspired by FINCON (NeurIPS 2024)
+    and fractional Kelly research:
+      1. Cap each position at MAX_SINGLE_POSITION (40%)
+      2. Scale total invested to MAX_INVESTED (90%)
+      3. Drop positions below MIN_POSITION
+
+    The 10% cash floor acts as a buffer for:
+    - Exploiting sudden dip opportunities
+    - Covering transaction costs/slippage
+    - Risk management (never go fully invested)
+    """
+    if not weights:
+        return weights
+
+    # Step 1: cap each position at 40%
+    capped = {k: min(v, _MAX_SINGLE_POSITION) for k, v in weights.items()}
+
+    # Step 2: rescale so total invested ≤ 90%
+    total = sum(capped.values())
+    if total > _MAX_INVESTED:
+        scale = _MAX_INVESTED / total
+        capped = {k: round(v * scale, 6) for k, v in capped.items()}
+    elif total > 0:
+        # Already under the cap — just round
+        capped = {k: round(v, 6) for k, v in capped.items()}
+
+    # Step 3: drop tiny positions (noise)
+    capped = {k: (v if v >= _MIN_POSITION else 0.0) for k, v in capped.items()}
+
+    return capped
+
+
 @tool
 def equal_weight(recommendations_json: str) -> str:
     """
     Calculate equal-weight position sizes for all BUY-signal stocks.
 
-    Splits 100% of investable capital equally across every stock with a BUY signal.
+    Splits investable capital equally across every stock with a BUY signal.
+    Applies portfolio safety constraints: max 40% per stock, max 90% total.
     SELL and HOLD signals receive a target weight of 0.
 
     Args:
@@ -54,10 +99,11 @@ def equal_weight(recommendations_json: str) -> str:
             weights[r["ticker"]] = 0.0
         return json.dumps({"method": "equal_weight", "weights": weights})
 
-    equal_share = 1.0 / len(buys)
+    equal_share = min(1.0 / len(buys), _MAX_SINGLE_POSITION)
     for r in recs:
         weights[r["ticker"]] = round(equal_share, 6) if r.get("signal") == "BUY" else 0.0
 
+    weights = _apply_portfolio_constraints(weights)
     return json.dumps({"method": "equal_weight", "weights": weights})
 
 
@@ -66,8 +112,8 @@ def conviction_weight(recommendations_json: str) -> str:
     """
     Calculate conviction-weighted position sizes for all BUY-signal stocks.
 
-    Weights each BUY stock proportionally to its conviction score so that
-    higher-confidence picks receive larger allocations.
+    Weights each BUY stock proportionally to its conviction score.
+    Applies portfolio safety constraints: max 40% per stock, max 90% total.
     SELL and HOLD signals receive a target weight of 0.
 
     Args:
@@ -94,6 +140,7 @@ def conviction_weight(recommendations_json: str) -> str:
         else:
             weights[r["ticker"]] = 0.0
 
+    weights = _apply_portfolio_constraints(weights)
     return json.dumps({"method": "conviction_weight", "weights": weights})
 
 
@@ -132,6 +179,7 @@ def volatility_adjusted_weight(recommendations_json: str) -> str:
         else:
             weights[r["ticker"]] = 0.0
 
+    weights = _apply_portfolio_constraints(weights)
     return json.dumps({"method": "volatility_adjusted_weight", "weights": weights})
 
 
@@ -189,6 +237,7 @@ def kelly_criterion_weight(recommendations_json: str) -> str:
         else:
             weights[r["ticker"]] = 0.0
 
+    weights = _apply_portfolio_constraints(weights)
     return json.dumps({
         "method": "kelly_criterion_weight",
         "weights": weights,
