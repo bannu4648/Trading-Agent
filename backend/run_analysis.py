@@ -14,8 +14,18 @@ import argparse
 import json
 import logging
 import os
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List
+
+# Ensure sibling agent packages are importable
+_BACKEND_DIR = str(Path(__file__).resolve().parent)
+if _BACKEND_DIR not in sys.path:
+    sys.path.insert(0, _BACKEND_DIR)
+
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+_DEFAULT_RESULTS_DIR = os.path.join(_PROJECT_ROOT, "results")
 
 # stdlib above, local project imports below
 from technical_agent.agent import TechnicalAnalystAgent
@@ -81,7 +91,7 @@ def run_full_analysis(
     start_date: str | None = None,
     end_date: str | None = None,
     interval: str = "1d",
-    output_dir: str = "./results",
+    output_dir: str = _DEFAULT_RESULTS_DIR,
 ) -> Dict[str, Any]:
     """
     Full pipeline: technical → sentiment → fundamentals → synthesis →
@@ -222,7 +232,7 @@ def main() -> None:
     parser.add_argument("--start",   help="Start date YYYY-MM-DD")
     parser.add_argument("--end",     help="End date YYYY-MM-DD")
     parser.add_argument("--interval", default="1d", help="Price interval (1d, 1wk...)")
-    parser.add_argument("--output", "-o", default="./results", help="Output directory")
+    parser.add_argument("--output", "-o", default=_DEFAULT_RESULTS_DIR, help="Output directory")
 
     args = parser.parse_args()
     tickers = [t.strip().upper() for t in args.tickers.split(",") if t.strip()]

@@ -14,13 +14,13 @@ A unified autonomous stock analysis and portfolio allocation platform. The syste
    pip install -r requirements.txt # or uv sync
    ```
 
-2. **Run Full Analysis**
+2. **Run Full Analysis (CLI)**
    The orchestrator runs the full pipeline for multiple tickers.
    ```bash
-   python run_analysis.py --tickers AAPL,NVDA,MSFT
+   python backend/run_analysis.py --tickers AAPL,NVDA,MSFT
    ```
 
-3. **Run the React UI (Recommended)**
+3. **Run the React UI**
    Start the FastAPI backend and React frontend in two terminals:
    ```bash
    # Terminal 1 — Backend API
@@ -34,21 +34,34 @@ A unified autonomous stock analysis and portfolio allocation platform. The syste
    ```
    Open `http://localhost:5173` in your browser.
 
-4. **Run the Legacy Dash Dashboard**
-   ```bash
-   python dashboard.py
-   ```
-   Open `http://localhost:8050` in your browser.
-
 ## 🖥️ Architecture
 
-The project has a decoupled frontend/backend architecture:
+The project follows a clean separation of concerns with two top-level modules:
+
+```
+Trading-Agent/
+├── backend/                  ← All Python / agent / API code
+│   ├── main.py               ← FastAPI server
+│   ├── run_analysis.py       ← Orchestrator pipeline
+│   ├── technical_agent/
+│   ├── sentiment_agent/
+│   ├── fundamentals_agent/
+│   ├── summarizer_agent/
+│   ├── trader_agent/
+│   └── portfolio_validator/
+├── frontend/                 ← React (Vite) UI
+│   ├── src/
+│   └── package.json
+├── results/                  ← Saved JSON outputs
+├── pyproject.toml
+└── .env
+```
 
 | Layer | Technology | Path |
 |-------|-----------|------|
 | **Frontend** | React (Vite) | `frontend/` |
-| **Backend API** | FastAPI + Uvicorn | `backend/` |
-| **Analysis Engine** | Python (LangGraph, LangChain) | `run_analysis.py` + agent modules |
+| **Backend API** | FastAPI + Uvicorn | `backend/main.py` |
+| **Analysis Engine** | Python (LangGraph, LangChain) | `backend/run_analysis.py` + agent modules |
 
 ### API Endpoints
 

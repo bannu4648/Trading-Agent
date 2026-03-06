@@ -93,9 +93,11 @@ def _run_analysis_job(job_id: str, tickers: list[str],
                       start_date: str | None, end_date: str | None,
                       interval: str) -> None:
     """Runs the full analysis pipeline in a thread."""
-    # Import here to avoid circular imports and keep startup fast
+    # Add backend/ dir to sys.path so agent modules resolve
     import sys
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    _backend_dir = str(Path(__file__).resolve().parent)
+    if _backend_dir not in sys.path:
+        sys.path.insert(0, _backend_dir)
     from run_analysis import run_full_analysis
     from technical_agent.shared.serialization import to_serializable
 
