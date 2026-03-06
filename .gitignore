@@ -5,3 +5,5 @@ venv/
 .env
 output/
 results/
+node_modules/
+frontend/dist/
