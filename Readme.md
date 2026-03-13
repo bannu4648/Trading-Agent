@@ -1,99 +1,128 @@
-# Trading-Agent (Technical Analyst Agent)
+# Trading-Agent (LLM Multi-Agent Financial System)
 
-Standalone technical analyst agent using LangGraph, yfinance, and pandas-ta.
+A unified autonomous stock analysis and portfolio allocation platform. The system leverages an orchestrator to run parallel domain-expert LLM agents (Technical, Sentiment, and Fundamental Analysis), synthesizes their findings into a cohesive narrative, and passes the intelligence to a Trader Agent which sizes positions via mathematical models dynamically checked by a Portfolio Validator.
 
-## Features
+![High-Level Pipeline Architecture](./results/pipeline_overview_v3_1772354485571.png)
 
-- Fetches OHLCV data via yfinance
-- Computes a suite of technical indicators
-- Includes intraday indicator presets and VWAP
-- Generates multiple rule-based signals
-- Produces an integration handoff schema for other agents
-- Optional LLM summaries (Ollama or Gemini)
-- Plugin-style registry for custom signals
-- Optional FastAPI UI to chat with the agent
+## 🚀 Quick Start
 
-## Dependency management (uv)
+1. **Install Dependencies**
+   The project uses `uv` for package management, but pip can be used with the included `pyproject.toml`.
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements.txt # or uv sync
+   ```
 
-This project uses `uv` with `pyproject.toml` (instead of `requirements.txt`).
-Use Python `3.12` or `3.13`.
+2. **Run Full Analysis (CLI)**
+   The orchestrator runs the full pipeline for multiple tickers.
+   ```bash
+   python backend/run_analysis.py --tickers AAPL,NVDA,MSFT
+   ```
 
-```bash
-uv sync
-```
+3. **Run the React UI**
+   Start the FastAPI backend and React frontend in two terminals:
+   ```bash
+   # Terminal 1 — Backend API
+   source .venv/bin/activate
+   python -m uvicorn backend.main:app --port 8000
 
-Run commands inside the managed environment with:
+   # Terminal 2 — React Frontend
+   cd frontend
+   npm install   # first time only
+   npm run dev
+   ```
+   Open `http://localhost:5173` in your browser.
 
-```bash
-uv run <command>
-```
+## 🖥️ Architecture
 
-## Quick start
-
-```bash
-uv run python -m technical_agent.cli \
-  --tickers AAPL,MSFT \
-  --start 2023-01-01 \
-  --end 2024-01-01 \
-  --interval 1d
-```
-
-## Environment variables
-
-Create and edit `.env` at the project root. It is loaded automatically by the app.
+The project follows a clean separation of concerns with two top-level modules:
 
 ```
-LLM_PROVIDER=ollama | gemini
-OLLAMA_MODEL=llama3:3b
-OLLAMA_BASE_URL=http://localhost:11434
-GEMINI_MODEL=gemini-1.5-flash
-GEMINI_API_KEY=your_api_key
-LLM_TEMPERATURE=0.2
-LLM_MAX_TOKENS=512
-
-# Langfuse tracing (self-hosted/local supported)
-LANGFUSE_ENABLED=true
-LANGFUSE_HOST=http://localhost:3000
-LANGFUSE_PUBLIC_KEY=pk-lf-...
-LANGFUSE_SECRET_KEY=sk-lf-...
-LANGFUSE_PROJECT=technical-agent
-LANGFUSE_SESSION_ID=local-dev
-LANGFUSE_USER_ID=dev-user
-LANGFUSE_RELEASE=dev
+Trading-Agent/
+├── backend/                  ← All Python / agent / API code
+│   ├── main.py               ← FastAPI server
+│   ├── run_analysis.py       ← Orchestrator pipeline
+│   ├── technical_agent/
+│   ├── sentiment_agent/
+│   ├── fundamentals_agent/
+│   ├── summarizer_agent/
+│   ├── trader_agent/
+│   └── portfolio_validator/
+├── frontend/                 ← React (Vite) UI
+│   ├── src/
+│   └── package.json
+├── results/                  ← Saved JSON outputs
+├── pyproject.toml
+└── .env
 ```
 
-## Tracing (Langfuse)
+| Layer | Technology | Path |
+|-------|-----------|------|
+| **Frontend** | React (Vite) | `frontend/` |
+| **Backend API** | FastAPI + Uvicorn | `backend/main.py` |
+| **Analysis Engine** | Python (LangGraph, LangChain) | `backend/run_analysis.py` + agent modules |
 
-When `LANGFUSE_ENABLED=true`, the agent sends traces for:
+### API Endpoints
 
-- LangGraph run execution
-- Indicator/signals pipeline spans
-- Each LLM summary call
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/analyze` | Launch a multi-agent analysis (runs in background) |
+| `GET` | `/api/status/{job_id}` | Poll analysis job progress |
+| `GET` | `/api/results` | List all past result files |
+| `GET` | `/api/results/{filename}` | Load a specific past result |
+| `GET` | `/api/health` | Health check |
 
-The integration uses the official open-source Langfuse Python SDK and LangChain callback handler.
+## 🛠️ The Agents
 
-## Custom signals
+### 1. Technical Analyst Agent
+- Fetches OHLCV data and computes comprehensive indicators (Dual RSI, MACD, Bollinger Bands, ATR, Supertrend, etc.).
+- Evaluates 12+ standard mathematical signals dynamically.
+- Automatically handles overbought/oversold boundaries dynamically for volatile tech stocks.
 
-Add your own signals in `technical_agent/signals/expand.py` or create a new module.
-Then pass `--extra-signal-module your.module.path` or set
-`AgentConfig.extra_signal_modules` programmatically.
+### 2. Multi-Agent Sentiment Agent
+- A sequential *LangGraph* pipeline designed to respect free-tier API rate limits.
+- Incorporates and scores data from:
+  - **News**: Global headlines (Finviz, Yahoo).
+  - **Social**: Reddit keyword buzz (ApeWisdom).
+  - **Analysts**: Wall Street Ratings (Finnhub).
+  - **Web**: General blog/context searches (DuckDuckGo).
+- Uses a weighted aggregator (Analyst 40%, News 35%, Social 15%, Web 10%).
 
-## Integration schema
+### 3. Fundamentals Agent
+- Fetches primary financial statements from `yfinance` with AlphaVantage fallback.
+- Computes core ratios (P/E, Profit Margins, Debt/Equity).
+- Serves as the ultimate quality gate via the **9-criterion Piotroski F-Score**. Any stock scoring <= 2 is hard-overridden to HOLD.
 
-The agent emits a `handoff` payload inside the output, and the JSON schema is stored at:
+### 4. Summarizer Agent
+- A sophisticated LLM synthesize node that ingests the conflicting numerical and text signals from the previous three agents to build a human-readable recommendation card.
 
+### 5. Trader Agent & Portfolio Validator
+- Acts as the portfolio manager. Translates textual "Conviction" and "Expected Return" into quantitative inputs.
+- Chooses dynamically from four position sizing algorithms: *Equal Weight, Conviction Weight, Volatility Parity, and Half-Kelly (Kelly Criterion)*.
+- The **Portfolio Validator** strictly enforces a 40% single-asset cap and guarantees a 10% uninvested cash floor.
+
+## ⚙️ Configuration (.env)
+
+Create a `.env` file in the project root. The system primarily relies on Groq for Trader logic and Gemini for Sentiment scoring, though both can be globally re-mapped.
+
+```env
+# --- Main Providers ---
+LLM_PROVIDER=groq
+GROQ_API_KEY=your_groq_key
+GROQ_MODEL=llama-3.3-70b-versatile
+
+GEMINI_API_KEY=your_gemini_key
+GEMINI_MODEL=gemini-2.0-flash
+
+# --- Data APIS ---
+FINNHUB_API_KEY=your_finnhub_key
+ALPHAVANTAGE_API_KEY=your_alphavantage_key
+
+# --- Configs ---
+LANGCHAIN_TRACING_V2=true 
+LANGCHAIN_API_KEY=your_langsmith_key
 ```
-technical_agent/schema/technical_handoff.schema.json
-```
 
-## UI (chat)
-
-Run the API server:
-
-```bash
-uv run uvicorn technical_agent.server:app --reload
-```
-
-Open: `http://localhost:8000`
-
-The UI posts to `/api/chat` and returns the full structured JSON response.
+## 📊 Output
+Results are saved as JSON cache files in the `./results/` directory, while logs output directly into the stream. When using the React UI, a rich dashboard with portfolio allocation charts, per-ticker detail tabs, and risk validation panels is available.

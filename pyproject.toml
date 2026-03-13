@@ -18,6 +18,17 @@ dependencies = [
     "numpy",
     "fastapi",
     "uvicorn",
+    "google-genai",
+    "openai",
+    "requests",
+    "beautifulsoup4",
+    "pydantic-settings",
+    "finnhub-python",
+    "dash",
+    "dash-bootstrap-components",
+    "langchain-openai",
+    "langchain-groq",
+    "python-docx>=1.2.0",
 ]
 
 [build-system]
