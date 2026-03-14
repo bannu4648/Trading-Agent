@@ -1,4 +1,5 @@
 import SignalBadge from './SignalBadge';
+import ReactMarkdown from 'react-markdown';
 
 export default function TickerCard({ ticker, data }) {
     const tech = data?.technical || {};
@@ -30,7 +31,9 @@ export default function TickerCard({ ticker, data }) {
                     <h3>🎯 Strategy: {ticker}</h3>
                     {order && <SignalBadge signal={order.action || 'HOLD'} />}
                 </div>
-                <div className="synthesis-content">{synth}</div>
+                <div className="synthesis-content">
+                    <ReactMarkdown>{synth}</ReactMarkdown>
+                </div>
             </div>
 
             {/* Three column details */}

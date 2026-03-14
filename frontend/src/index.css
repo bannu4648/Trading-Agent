@@ -626,12 +626,47 @@ a:hover {
   gap: var(--sp-sm);
 }
 
-/* --- Synthesis Card --- */
+/* --- Synthesis Card (Markdown) --- */
 .synthesis-content {
   font-size: 0.88rem;
   line-height: 1.75;
   color: var(--text-secondary);
-  white-space: pre-wrap;
+}
+
+.synthesis-content h3, 
+.synthesis-content h4 {
+  color: var(--text-primary);
+  margin-top: var(--sp-md);
+  margin-bottom: var(--sp-xs);
+  font-weight: 600;
+}
+
+.synthesis-content p {
+  margin-bottom: var(--sp-sm);
+}
+
+.synthesis-content ul {
+  padding-left: var(--sp-lg);
+  margin-bottom: var(--sp-sm);
+}
+
+.synthesis-content li {
+  margin-bottom: 4px;
+}
+
+.synthesis-content pre {
+  background: var(--bg-input);
+  padding: var(--sp-sm);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  margin-top: var(--sp-sm);
+  border: 1px solid var(--border-color);
+}
+
+.synthesis-content code {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--accent-cyan);
 }
 
 .synthesis-content strong, .synthesis-content b {
