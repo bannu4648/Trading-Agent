@@ -1,4 +1,5 @@
-const API_BASE = 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_BASE
+  ?? (import.meta.env.DEV ? 'http://localhost:8000' : 'https://trading-agent-backend.onrender.com');
 
 export async function startAnalysis(tickers, interval = '1d') {
   const res = await fetch(`${API_BASE}/api/analyze`, {
