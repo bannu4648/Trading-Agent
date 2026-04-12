@@ -21,8 +21,8 @@ class Settings(BaseSettings):
     deepseek_api_key: Optional[str] = None
     gemini_api_key: Optional[str] = None
 
-    # Finnhub API key for analyst data (free at https://finnhub.io/register)
-    finnhub_api_key: Optional[str] = "d7d77khr01qggoen8ccgd7d77khr01qggoen8cd0"
+    # Finnhub API key for analyst data — set FINNHUB_API_KEY in .env (never commit keys)
+    finnhub_api_key: Optional[str] = None
 
     # model names with reasonable defaults
     groq_model: str = "llama-3.3-70b-versatile"

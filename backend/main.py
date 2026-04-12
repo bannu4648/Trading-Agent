@@ -411,6 +411,11 @@ def _run_daily_paper_job(job_id: str, req: DailyPaperRequest) -> None:
     def _on_progress(snapshot: Dict[str, Any]) -> None:
         _jobs[job_id]["partial_result"] = snapshot
 
+    stream_q = _stream_queues.get(job_id)
+    emit_token = None
+    if stream_q is not None:
+        emit_token = set_stream_emitter(lambda ev: _stream_put(job_id, ev))
+
     try:
         trade_date = (req.trade_date or "").strip() or datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
@@ -465,6 +470,8 @@ def _run_daily_paper_job(job_id: str, req: DailyPaperRequest) -> None:
         _jobs[job_id]["error"] = str(exc)
         _jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
     finally:
+        if emit_token is not None:
+            reset_stream_emitter(emit_token)
         _stream_put(
             job_id,
             {
@@ -600,6 +607,7 @@ def start_daily_paper(req: DailyPaperRequest):
         "completed_at": None,
         "job_kind": "daily_paper",
     }
+    _stream_queues[job_id] = queue.Queue(maxsize=_STREAM_QUEUE_MAX)
     _executor.submit(_run_daily_paper_job, job_id, req)
     logger.info("[api] Started daily paper job %s", job_id)
     return JobResponse(job_id=job_id, status="running")
