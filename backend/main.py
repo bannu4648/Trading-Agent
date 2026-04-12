@@ -234,8 +234,12 @@ def _run_analysis_job(job_id: str, tickers: list[str],
 
     stream_q = _stream_queues.get(job_id)
     emit_token = None
+    job_ctx_token = None
     if stream_q is not None:
-        emit_token = set_stream_emitter(lambda ev: _stream_put(job_id, ev))
+        emit_token, job_ctx_token = set_stream_emitter(
+            lambda ev: _stream_put(job_id, ev),
+            job_id=job_id,
+        )
 
     try:
         logger.info(f"[job {job_id}] Starting analysis for {tickers}")
@@ -263,7 +267,7 @@ def _run_analysis_job(job_id: str, tickers: list[str],
         _jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
     finally:
         if emit_token is not None:
-            reset_stream_emitter(emit_token)
+            reset_stream_emitter(emit_token, job_ctx_token)
         _stream_put(
             job_id,
             {
@@ -286,8 +290,12 @@ def _run_top20_longshort_job(job_id: str, req: Top20LongShortRequest) -> None:
 
     stream_q = _stream_queues.get(job_id)
     emit_token = None
+    job_ctx_token = None
     if stream_q is not None:
-        emit_token = set_stream_emitter(lambda ev: _stream_put(job_id, ev))
+        emit_token, job_ctx_token = set_stream_emitter(
+            lambda ev: _stream_put(job_id, ev),
+            job_id=job_id,
+        )
 
     try:
         logger.info(f"[job {job_id}] Starting top-20 long/short run")
@@ -322,7 +330,7 @@ def _run_top20_longshort_job(job_id: str, req: Top20LongShortRequest) -> None:
         _jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
     finally:
         if emit_token is not None:
-            reset_stream_emitter(emit_token)
+            reset_stream_emitter(emit_token, job_ctx_token)
         _stream_put(
             job_id,
             {
@@ -345,8 +353,12 @@ def _run_sp500_screened_job(job_id: str, req: Sp500ScreenedRequest) -> None:
 
     stream_q = _stream_queues.get(job_id)
     emit_token = None
+    job_ctx_token = None
     if stream_q is not None:
-        emit_token = set_stream_emitter(lambda ev: _stream_put(job_id, ev))
+        emit_token, job_ctx_token = set_stream_emitter(
+            lambda ev: _stream_put(job_id, ev),
+            job_id=job_id,
+        )
 
     try:
         logger.info(f"[job {job_id}] Starting S&P 500 screened run")
@@ -388,7 +400,7 @@ def _run_sp500_screened_job(job_id: str, req: Sp500ScreenedRequest) -> None:
         _jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
     finally:
         if emit_token is not None:
-            reset_stream_emitter(emit_token)
+            reset_stream_emitter(emit_token, job_ctx_token)
         _stream_put(
             job_id,
             {
@@ -413,8 +425,12 @@ def _run_daily_paper_job(job_id: str, req: DailyPaperRequest) -> None:
 
     stream_q = _stream_queues.get(job_id)
     emit_token = None
+    job_ctx_token = None
     if stream_q is not None:
-        emit_token = set_stream_emitter(lambda ev: _stream_put(job_id, ev))
+        emit_token, job_ctx_token = set_stream_emitter(
+            lambda ev: _stream_put(job_id, ev),
+            job_id=job_id,
+        )
 
     try:
         trade_date = (req.trade_date or "").strip() or datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -471,7 +487,7 @@ def _run_daily_paper_job(job_id: str, req: DailyPaperRequest) -> None:
         _jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
     finally:
         if emit_token is not None:
-            reset_stream_emitter(emit_token)
+            reset_stream_emitter(emit_token, job_ctx_token)
         _stream_put(
             job_id,
             {
