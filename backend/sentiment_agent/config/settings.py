@@ -1,7 +1,9 @@
 """
-Loads configuration from .env file using pydantic-settings.
-Supports switching between LLM providers (Groq, DeepSeek, Gemini)
-via the LLM_PROVIDER environment variable.
+Loads configuration from .env using pydantic-settings.
+
+LLM routing for sentiment is handled by ``llm_provider.resolve_llm`` (shared
+with other agents): cloud keys when present, otherwise Ollama. Finnhub and
+weight settings below still apply.
 """
 from pydantic_settings import BaseSettings
 from pydantic import ConfigDict
@@ -11,15 +13,15 @@ from typing import Optional
 class Settings(BaseSettings):
     model_config = ConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    # which LLM backend to use -- "groq", "deepseek", or "gemini"
-    llm_provider: str = "groq"
+    # Legacy field; sentiment uses llm_provider.resolve_llm instead.
+    llm_provider: str = "auto"
 
     # API keys (only need the one for whichever provider you picked)
     groq_api_key: Optional[str] = None
     deepseek_api_key: Optional[str] = None
     gemini_api_key: Optional[str] = None
 
-    # Finnhub API key for analyst data (free at https://finnhub.io/register)
+    # Finnhub API key for analyst data — set FINNHUB_API_KEY in .env (never commit keys)
     finnhub_api_key: Optional[str] = None
 
     # model names with reasonable defaults
@@ -41,6 +43,10 @@ class Settings(BaseSettings):
     # If True, a web score of exactly 0.0 is treated as missing (not counted)
     # and its weight is redistributed to the other sources
     web_zero_means_missing: bool = True
+
+    # Skip social + web + debate LLM steps (news + analyst + aggregate + summary only).
+    # Env: SENTIMENT_FAST_PIPELINE=true
+    sentiment_fast_pipeline: bool = False
 
     # Analyst confidence floor: if analyst_score >= this, confidence >= analyst_floor
     analyst_confidence_threshold: float = 0.7

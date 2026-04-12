@@ -4,6 +4,7 @@ export default function RiskPanel({ riskReport }) {
     const level = riskReport.risk_level || 'UNKNOWN';
     const warnings = riskReport.warnings || [];
     const metrics = riskReport.metrics || {};
+    const lsMode = Boolean(metrics.has_short_positions);
 
     const levelClass = level === 'LOW' ? 'badge-risk-low' : level === 'MEDIUM' ? 'badge-risk-medium' : 'badge-risk-high';
 
@@ -16,12 +17,16 @@ export default function RiskPanel({ riskReport }) {
 
             <div className="grid-4" style={{ marginBottom: 'var(--sp-lg)' }}>
                 <div className="stat">
-                    <span className="stat-label">Total Invested</span>
-                    <span className="stat-value">{((metrics.total_invested || 0) * 100).toFixed(1)}%</span>
+                    <span className="stat-label">{lsMode ? 'Gross long' : 'Total invested'}</span>
+                    <span className="stat-value">
+                        {(((lsMode ? metrics.gross_long : metrics.total_invested) || 0) * 100).toFixed(1)}%
+                    </span>
                 </div>
                 <div className="stat">
-                    <span className="stat-label">Cash Buffer</span>
-                    <span className="stat-value positive">{((metrics.cash_buffer || 0) * 100).toFixed(1)}%</span>
+                    <span className="stat-label">{lsMode ? 'Gross short' : 'Cash buffer'}</span>
+                    <span className="stat-value positive">
+                        {(((lsMode ? metrics.gross_short : metrics.cash_buffer) || 0) * 100).toFixed(1)}%
+                    </span>
                 </div>
                 <div className="stat">
                     <span className="stat-label">Portfolio Vol</span>

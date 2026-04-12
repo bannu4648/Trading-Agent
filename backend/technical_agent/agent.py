@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 from .config import AgentConfig, config_from_env
 from .graph import build_graph
@@ -57,7 +61,19 @@ class TechnicalAnalystAgent:
                 run_span.set_output(to_serializable(output))
                 return output
         finally:
-            trace.flush()
+            # Langfuse flush can hang on slow/unreachable hosts; never block the pipeline.
+            if trace.enabled and trace.langfuse_client is not None:
+                try:
+                    with ThreadPoolExecutor(max_workers=1) as pool:
+                        pool.submit(trace.flush).result(timeout=10)
+                except FuturesTimeout:
+                    logger.warning(
+                        "[technical] Tracing flush timed out after 10s — continuing without blocking"
+                    )
+                except Exception:
+                    pass
+            else:
+                trace.flush()
 
     def _build_output(self, state: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]:
         snapshots = state.get("snapshots", {})

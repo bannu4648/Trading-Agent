@@ -10,12 +10,13 @@ from __future__ import annotations
 import json
 import logging
 import math
-import os
 import re
 from typing import Any
 
-from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, SystemMessage
+
+from llm_provider import get_langchain_chat_model
+from streaming_context import emit_llm_chunk, emit_llm_end, emit_llm_start
 
 from .models import ResearchTeamOutput, StockRecommendation
 
@@ -59,32 +60,18 @@ def _fundamentals_quality_score(fundamentals: dict[str, Any]) -> float:
     Positive = strong fundamentals, negative = weak.
     """
     score = 0.0
-    checks = 0
-
-    # ROE check: > 15% is good
     roe = _parse_pct(fundamentals.get("ROE"))
     if roe is not None:
-        checks += 1
         score += 0.5 if roe > 0.15 else (-0.3 if roe < 0.05 else 0.0)
-
-    # Profit margin check
     margin = _parse_pct(fundamentals.get("Profit Margin"))
     if margin is not None:
-        checks += 1
         score += 0.3 if margin > 0.15 else (-0.3 if margin < 0 else 0.0)
-
-    # Revenue growth check
     rev_growth = _parse_pct(fundamentals.get("Revenue Growth"))
     if rev_growth is not None:
-        checks += 1
         score += 0.3 if rev_growth > 0.05 else (-0.2 if rev_growth < 0 else 0.0)
-
-    # Debt/Equity check: < 1.0 is healthy
     de = _parse_ratio(fundamentals.get("Debt/Equity"))
     if de is not None:
-        checks += 1
-        score += 0.2 if de < 100 else (-0.3 if de > 200 else 0.0)  # yfinance reports as %
-
+        score += 0.2 if de < 100 else (-0.3 if de > 200 else 0.0)
     return max(-1.0, min(1.0, score))
 
 
@@ -98,54 +85,6 @@ _COMPACT_FUNDAMENTALS_KEYS = [
     "Revenue Growth", "Earnings Growth",
     "Market Cap", "Piotroski F-Score",
 ]
-
-
-def _parse_pct(val: str | None) -> float | None:
-    """'20.50%' → 0.205. Returns None if the value is missing or can't be parsed."""
-    if val is None or val == "N/A":
-        return None
-    try:
-        return float(str(val).replace("%", "").replace(",", "").strip()) / 100.0
-    except (ValueError, TypeError):
-        return None
-
-
-def _parse_ratio(val: str | None) -> float | None:
-    """'3.45' → 3.45. Returns None on failure."""
-    if val is None or val == "N/A":
-        return None
-    try:
-        return float(str(val).replace(",", "").replace("$", "").strip())
-    except (ValueError, TypeError):
-        return None
-
-
-def _fundamentals_quality_score(fund: dict[str, Any]) -> float:
-    """
-    Quick heuristic: turns fundamental ratios into a -1.0 to +1.0 score.
-    Used to nudge formula-based conviction when we don't have an LLM call.
-    """
-    score = 0.0
-
-    # Decent ROE means the company is generating good returns on equity
-    roe = _parse_pct(fund.get("ROE"))
-    if roe is not None:
-        score += 0.5 if roe > 0.15 else (-0.3 if roe < 0.05 else 0.0)
-
-    margin = _parse_pct(fund.get("Profit Margin"))
-    if margin is not None:
-        score += 0.3 if margin > 0.15 else (-0.3 if margin < 0 else 0.0)
-
-    rev_growth = _parse_pct(fund.get("Revenue Growth"))
-    if rev_growth is not None:
-        score += 0.3 if rev_growth > 0.05 else (-0.2 if rev_growth < 0 else 0.0)
-
-    # yfinance gives D/E as a percentage (e.g. 102 = 102%), so < 100 is healthy
-    de = _parse_ratio(fund.get("Debt/Equity"))
-    if de is not None:
-        score += 0.2 if de < 100 else (-0.3 if de > 200 else 0.0)
-
-    return max(-1.0, min(1.0, score))
 
 
 def _compact_fundamentals(fund: dict[str, Any]) -> dict[str, str]:
@@ -213,11 +152,6 @@ def _llm_interpret(
     the qualitative research package.  Returns None on any failure so the
     caller can fall back to formulas.
     """
-    model_name = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
-    api_key    = os.environ.get("GROQ_API_KEY")
-    if not api_key:
-        return None
-
     # Build a compact summary of the inputs — avoid sending massive raw dicts
     debate = sentiment.get("debate", {})
     tech_signals = [
@@ -246,13 +180,48 @@ def _llm_interpret(
         f"Return the JSON interpretation now."
     )
 
+    def _stream_piece(chunk: object) -> str:
+        c = getattr(chunk, "content", None)
+        if isinstance(c, str):
+            return c
+        if isinstance(c, list):
+            return "".join(
+                str(x.get("text", x)) if isinstance(x, dict) else getattr(x, "text", str(x))
+                for x in c
+            )
+        return str(c) if c is not None else ""
+
     try:
-        llm = ChatGroq(model=model_name, temperature=0.0, api_key=api_key)
-        response = llm.invoke([
+        llm = get_langchain_chat_model(temperature=0.0)
+        messages = [
             SystemMessage(content=_INTERPRETATION_SYSTEM),
             HumanMessage(content=human_text),
-        ])
-        raw = response.content.strip()
+        ]
+        emit_llm_start(pipeline="research_adapter", agent="interpret", ticker=ticker)
+        acc: list[str] = []
+        try:
+            for chunk in llm.stream(messages):
+                piece = _stream_piece(chunk)
+                if piece:
+                    acc.append(piece)
+                    emit_llm_chunk(
+                        pipeline="research_adapter",
+                        agent="interpret",
+                        ticker=ticker,
+                        chunk=piece,
+                    )
+            raw = "".join(acc).strip()
+        except Exception:
+            response = llm.invoke(messages)
+            raw = (getattr(response, "content", None) or "").strip()
+            if isinstance(raw, str) and raw:
+                emit_llm_chunk(
+                    pipeline="research_adapter",
+                    agent="interpret",
+                    ticker=ticker,
+                    chunk=raw,
+                )
+        emit_llm_end(pipeline="research_adapter", agent="interpret", ticker=ticker)
         # Strip markdown fences if present
         if raw.startswith("```"):
             raw = raw.split("```")[1]
@@ -398,6 +367,7 @@ def _derive_volatility(tech: dict[str, Any]) -> float:
 def build_research_output(
     combined_results: dict[str, Any],
     current_weights: dict[str, float] | None = None,
+    use_llm: bool = True,
 ) -> ResearchTeamOutput:
     """
     Convert the Trading-Agent pipeline output into a ResearchTeamOutput
@@ -422,7 +392,7 @@ def build_research_output(
         fundamentals = data.get("fundamentals", {})
 
         # ── 1. LLM interpretation (signal + conviction + expected_return) ──
-        llm_result = _llm_interpret(ticker, synthesis, sentiment, tech, fundamentals)
+        llm_result = _llm_interpret(ticker, synthesis, sentiment, tech, fundamentals) if use_llm else None
 
         if llm_result:
             signal     = llm_result["signal"]

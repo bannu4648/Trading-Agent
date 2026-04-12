@@ -3,7 +3,7 @@ name = "trading-agent"
 version = "0.1.0"
 description = "Technical analyst agent built with LangGraph."
 readme = "Readme.md"
-requires-python = ">=3.12,<3.14"
+requires-python = ">=3.12,<3.15"
 dependencies = [
     "langgraph",
     "langchain",
@@ -14,7 +14,6 @@ dependencies = [
     "langchain-google-genai",
     "yfinance",
     "pandas",
-    "pandas-ta",
     "numpy",
     "fastapi",
     "uvicorn",
@@ -28,6 +27,7 @@ dependencies = [
     "dash-bootstrap-components",
     "langchain-openai",
     "langchain-groq",
+    "langchain-mistralai",
     "python-docx>=1.2.0",
 ]
 

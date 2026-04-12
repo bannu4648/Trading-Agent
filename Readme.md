@@ -63,12 +63,16 @@ Trading-Agent/
 | **Backend API** | FastAPI + Uvicorn | `backend/main.py` |
 | **Analysis Engine** | Python (LangGraph, LangChain) | `backend/run_analysis.py` + agent modules |
 
+**Pipeline details (stages, top‑20 vs custom, why some tickers show N/A):** see [docs/PIPELINE.md](docs/PIPELINE.md).
+
 ### API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/api/analyze` | Launch a multi-agent analysis (runs in background) |
+| `POST` | `/api/analyze/top20-longshort` | Top‑20 universe: research + allocator + trader subset (see [docs/PIPELINE.md](docs/PIPELINE.md)) |
 | `GET` | `/api/status/{job_id}` | Poll analysis job progress |
+| `GET` | `/api/stream/{job_id}` | SSE: LLM chunks, stage labels, `job_done` |
 | `GET` | `/api/results` | List all past result files |
 | `GET` | `/api/results/{filename}` | Load a specific past result |
 | `GET` | `/api/health` | Health check |

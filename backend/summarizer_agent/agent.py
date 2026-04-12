@@ -8,6 +8,7 @@ import logging
 from typing import Any, Dict
 
 from sentiment_agent.models.gemini_client import gemini_client
+from streaming_context import reset_stream_ticker, set_stream_ticker
 
 logger = logging.getLogger(__name__)
 
@@ -84,11 +85,17 @@ class SummarizerAgent:
             fundamentals_summary=self._format_fundamentals(fund),
         )
 
+        tkn = set_stream_ticker(ticker)
         try:
-            return self.llm.generate(prompt)
+            return self.llm.generate(
+                prompt,
+                stream_pipeline="synthesis",
+            )
         except Exception as exc:
             self.logger.error(f"[summarizer] LLM call failed for {ticker}: {exc}")
             return "Synthesis unavailable — LLM call failed."
+        finally:
+            reset_stream_ticker(tkn)
 
     # ------------------------------------------------------------------
     # Private helpers
