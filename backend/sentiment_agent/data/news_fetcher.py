@@ -2,10 +2,14 @@
 Scrapes news headlines from Finviz and Yahoo Finance for a given ticker.
 Results are combined and deduplicated before being passed to the news agent.
 """
+from __future__ import annotations
+
 import logging
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+
 import requests
-from bs4 import BeautifulSoup
 import yfinance as yf
+from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
@@ -41,17 +45,32 @@ def fetch_finviz_headlines(ticker: str, max_headlines: int = 10) -> list[str]:
 
 
 def fetch_yahoo_headlines(ticker: str, max_headlines: int = 5) -> list[str]:
-    """Get recent news from Yahoo Finance through yfinance."""
+    """
+    Get recent news from Yahoo Finance through yfinance.
+
+    yfinance can block indefinitely on some networks; run it in a thread with a
+    hard timeout so the sentiment pipeline never stalls here.
+    """
+    def _inner() -> list[str]:
+        try:
+            stock = yf.Ticker(ticker)
+            news = stock.news or []
+            return [
+                item.get("content", {}).get("title", "")
+                for item in news[:max_headlines]
+                if item.get("content", {}).get("title")
+            ]
+        except Exception as e:
+            logger.error(f"Yahoo Finance news fetch error for {ticker}: {e}")
+            return []
+
     try:
-        stock = yf.Ticker(ticker)
-        news = stock.news or []
-        return [
-            item.get("content", {}).get("title", "")
-            for item in news[:max_headlines]
-            if item.get("content", {}).get("title")
-        ]
-    except Exception as e:
-        logger.error(f"Yahoo Finance news fetch error for {ticker}: {e}")
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(_inner).result(timeout=25)
+    except FuturesTimeout:
+        logger.warning(
+            f"Yahoo Finance news timed out after 25s for {ticker} — skipping Yahoo headlines"
+        )
         return []
 
 

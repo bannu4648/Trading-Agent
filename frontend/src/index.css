@@ -612,6 +612,75 @@ a:hover {
   flex: 1;
 }
 
+/* --- Pipeline mode (custom / Top 20 / S&P 500) --- */
+.pipeline-mode-selector {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--sp-md);
+}
+
+@media (max-width: 900px) {
+  .pipeline-mode-selector {
+    grid-template-columns: 1fr;
+  }
+}
+
+.pipeline-mode-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  gap: var(--sp-xs);
+  padding: var(--sp-md) var(--sp-lg);
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.pipeline-mode-btn:hover:not(:disabled) {
+  border-color: var(--border-accent);
+  color: var(--text-primary);
+  background: var(--bg-card);
+}
+
+.pipeline-mode-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.pipeline-mode-btn.active {
+  border-color: var(--accent-blue);
+  background: rgba(59, 130, 246, 0.08);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+.pipeline-mode-btn-icon {
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.pipeline-mode-btn-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.pipeline-mode-btn-desc {
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.pipeline-mode-btn.active .pipeline-mode-btn-desc {
+  color: var(--text-secondary);
+}
+
 /* --- Results Dashboard --- */
 .dashboard-section {
   margin-bottom: var(--sp-xl);

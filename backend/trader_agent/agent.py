@@ -1,23 +1,20 @@
 """
-Trader Agent — LangGraph ReAct agent powered by Groq.
-
-Reads model configuration from the same .env the rest of the Trading-Agent
-project uses (LLM_PROVIDER, GROQ_API_KEY, GROQ_MODEL).
-
-Uses langgraph.prebuilt.create_react_agent (replaces the deprecated
-langchain AgentExecutor pattern).
+Trader Agent — LangGraph ReAct agent. LLM is chosen by llm_provider (Groq,
+Gemini, Ollama, etc.); missing API keys fall back to Ollama for local runs.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 import re
+import time
+from typing import Any, Dict
 
-from langchain_groq import ChatGroq
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage
 from langgraph.prebuilt import create_react_agent
+
+from llm_provider import get_langchain_chat_model
 
 from .models import ResearchTeamOutput, TradeOrder, TraderOutput
 from .tools import (
@@ -29,6 +26,35 @@ from .tools import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _current_weights_by_ticker(research_output: ResearchTeamOutput) -> dict[str, float]:
+    return {
+        r.ticker.strip().upper(): float(r.current_weight)
+        for r in research_output.recommendations
+    }
+
+
+def _normalize_trade_order_dict(
+    raw: Dict[str, Any],
+    current_by_ticker: dict[str, float],
+) -> Dict[str, Any]:
+    """
+    ReAct JSON often drops weight_delta even though the schema requires it.
+    Derive delta from proposed_weight and Research Team current_weight when missing.
+    """
+    out = dict(raw)
+    sym = str(out.get("ticker", "")).strip().upper()
+    cur = float(current_by_ticker.get(sym, 0.0)) if sym else 0.0
+    try:
+        prop = float(out["proposed_weight"])
+    except (KeyError, TypeError, ValueError):
+        prop = cur
+    wd = out.get("weight_delta")
+    missing = wd is None or (isinstance(wd, str) and not str(wd).strip())
+    if missing:
+        out["weight_delta"] = round(prop - cur, 6)
+    return out
 
 
 def _precompute_all_methods(recommendations_json: str) -> dict[str, dict]:
@@ -109,19 +135,9 @@ TOOLS = [generate_trade_orders]
 
 
 def build_react_agent(temperature: float = 0.0):
-    """
-    Construct and return a LangGraph ReAct agent for the Trader Agent.
-
-    Reads model name from GROQ_MODEL env var (set in .env alongside the rest
-    of the Trading-Agent project). Falls back to llama-3.3-70b-versatile.
-    """
-    model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
-
-    llm = ChatGroq(
-        model=model,
-        temperature=temperature,
-        api_key=os.environ.get("GROQ_API_KEY"),
-    )
+    """Construct a LangGraph ReAct agent using the shared LLM resolver."""
+    # Runnable chat model only — create_react_agent does prompt | model (see resolver doc).
+    llm = get_langchain_chat_model(temperature=temperature, wrap_observed=False)
 
     agent = create_react_agent(
         model=llm,
@@ -213,7 +229,13 @@ def run_trader_agent(research_output: ResearchTeamOutput) -> TraderOutput:
     )
 
     # invoke the ReAct agent — it returns {"messages": [...]}
+    logger.info("[trader] Invoking ReAct agent")
+    t0 = time.perf_counter()
     result = agent.invoke({"messages": [HumanMessage(content=user_message)]})
+    logger.info(
+        "[trader] ReAct agent done in %.1fs",
+        time.perf_counter() - t0,
+    )
 
     # The final AI message is the last message in the messages list
     messages = result.get("messages", [])
@@ -228,10 +250,92 @@ def run_trader_agent(research_output: ResearchTeamOutput) -> TraderOutput:
 
     output_dict = _extract_json(raw_output)
 
-    orders = [TradeOrder(**o) for o in output_dict["orders"]]
+    cw = _current_weights_by_ticker(research_output)
+    orders = [
+        TradeOrder(**_normalize_trade_order_dict(o, cw))
+        for o in output_dict["orders"]
+    ]
+    g_short = float(output_dict.get("gross_short_pct") or 0.0)
+    if not g_short and orders:
+        g_short = sum(max(0.0, -float(o.proposed_weight)) for o in orders)
     return TraderOutput(
         orders=orders,
         sizing_method_chosen=output_dict["sizing_method_chosen"],
         overall_rationale=output_dict["overall_rationale"],
-        total_invested_pct=output_dict["total_invested_pct"],
+        total_invested_pct=float(output_dict["total_invested_pct"]),
+        gross_short_pct=round(g_short, 6),
+    )
+
+
+def _rec_map(research_output: ResearchTeamOutput) -> dict[str, Any]:
+    return {r.ticker.strip().upper(): r for r in research_output.recommendations}
+
+
+def _allocator_order_rationale(
+    order: Dict[str, Any],
+    research_output: ResearchTeamOutput,
+) -> str:
+    sym = str(order.get("ticker", "")).strip().upper()
+    rec = _rec_map(research_output).get(sym)
+    w = float(order.get("proposed_weight", 0.0))
+    side = "long" if w >= 0 else "short"
+    sig = rec.signal if rec else "?"
+    conv = rec.conviction_score if rec else 0.0
+    return (
+        f"Target aligns with RiskPortfolioAgent book: {side} {abs(w):.2%} "
+        f"(signal {sig}, conviction {conv:.1f}/10). "
+        f"Action {order.get('action')} from delta vs current weight."
+    )
+
+
+def run_trader_from_allocator_targets(
+    research_output: ResearchTeamOutput,
+    allocator_weights: dict[str, float],
+) -> TraderOutput:
+    """
+    Build orders directly from signed allocator weights (long positive, short negative).
+    Skips ReAct and the four BUY-only sizing heuristics so the trader book matches validation.
+    """
+    if not allocator_weights:
+        return TraderOutput(
+            orders=[],
+            sizing_method_chosen="risk_portfolio_agent",
+            overall_rationale="No allocator weights provided.",
+            total_invested_pct=0.0,
+            gross_short_pct=0.0,
+        )
+
+    weights_rounded = {k: round(float(v), 6) for k, v in allocator_weights.items()}
+    payload = {"method": "risk_portfolio_agent", "weights": weights_rounded}
+    rec_json = json.dumps(research_output.model_dump())
+    raw = generate_trade_orders.invoke(
+        {
+            "weights_json": json.dumps(payload),
+            "recommendations_json": rec_json,
+        }
+    )
+    data = json.loads(raw)
+    cw = _current_weights_by_ticker(research_output)
+    orders: list[TradeOrder] = []
+    for o in data.get("orders", []):
+        od = _normalize_trade_order_dict(dict(o), cw)
+        od.setdefault("sizing_method_used", "risk_portfolio_agent")
+        od["rationale"] = _allocator_order_rationale(od, research_output)
+        orders.append(TradeOrder(**od))
+
+    gross_long = float(data.get("gross_long_pct", data.get("total_invested_pct", 0.0)))
+    gross_short = float(data.get("gross_short_pct", 0.0))
+    longs = [o.ticker for o in orders if o.proposed_weight > 1e-6]
+    shorts = [o.ticker for o in orders if o.proposed_weight < -1e-6]
+    overall = (
+        f"Book driven by risk_portfolio_agent allocator: gross long {gross_long:.1%}, "
+        f"gross short {gross_short:.1%}. Longs: {', '.join(longs) or '—'}; "
+        f"shorts: {', '.join(shorts) or '—'}."
+    )
+    return TraderOutput(
+        orders=orders,
+        sizing_method_chosen="risk_portfolio_agent",
+        overall_rationale=overall,
+        total_invested_pct=gross_long,
+        gross_short_pct=gross_short,
     )

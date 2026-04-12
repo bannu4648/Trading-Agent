@@ -17,7 +17,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 # Ensure sibling agent packages are importable
 _BACKEND_DIR = str(Path(__file__).resolve().parent)
@@ -92,22 +92,38 @@ def run_full_analysis(
     end_date: str | None = None,
     interval: str = "1d",
     output_dir: str = _DEFAULT_RESULTS_DIR,
+    progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
     """
     Full pipeline: technical → sentiment → fundamentals → synthesis →
     trader → portfolio validation → save JSON.
 
+    If ``progress_callback`` is set, it receives a JSON-serializable snapshot
+    after each major stage (for live UI updates). Snapshots include
+    ``metadata.pipeline_step`` and ``metadata.pipeline_step_label``.
+
     Returns the combined results dict (same thing that gets saved).
     """
+
+    def _emit(step: str, label: str) -> None:
+        combined["metadata"]["pipeline_step"] = step
+        combined["metadata"]["pipeline_step_label"] = label
+        if not progress_callback:
+            return
+        try:
+            snap = json.loads(json.dumps(combined, default=to_serializable))
+            progress_callback(snap)
+        except Exception as exc:
+            logger.warning(f"[orchestrator] progress_callback failed: {exc}")
 
     # --- Step 1: Technical (batched for all tickers at once) ---
     tech_output: Dict[str, Any] = {}
     try:
         tech_output = _run_technical(tickers, start_date, end_date, interval)
+        logger.info("[orchestrator] Technical phase finished — starting sentiment / fundamentals")
     except Exception as exc:
         logger.error(f"[orchestrator] Technical analysis failed: {exc}")
 
-    # Seed the combined dict — everything gets merged into this
     combined: Dict[str, Any] = {
         "metadata": {
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -116,11 +132,18 @@ def run_full_analysis(
         "results": {},
     }
 
+    for t in tickers:
+        combined["results"][t] = {
+            "technical": tech_output.get("tickers", {}).get(t, {}),
+        }
+    _emit("technical", "Technical analysis complete")
+
     # --- Step 2: Per-ticker sentiment + fundamentals ---
     for ticker in tickers:
         logger.info(f"[orchestrator] Processing {ticker}")
 
         ticker_tech = tech_output.get("tickers", {}).get(ticker, {})
+        combined["results"][ticker]["technical"] = ticker_tech
 
         ticker_sentiment: Dict[str, Any] = {}
         try:
@@ -134,11 +157,9 @@ def run_full_analysis(
         except Exception as exc:
             logger.error(f"[orchestrator] Fundamentals failed for {ticker}: {exc}")
 
-        combined["results"][ticker] = {
-            "technical": ticker_tech,
-            "sentiment": ticker_sentiment,
-            "fundamentals": ticker_fundamentals,
-        }
+        combined["results"][ticker]["sentiment"] = ticker_sentiment
+        combined["results"][ticker]["fundamentals"] = ticker_fundamentals
+        _emit("research", f"Sentiment & fundamentals done for {ticker}")
 
     # --- Step 3: Synthesis (one LLM call per ticker) ---
     logger.info("[orchestrator] Running synthesis")
@@ -149,13 +170,13 @@ def run_full_analysis(
         except Exception as exc:
             logger.error(f"[orchestrator] Synthesis failed for {ticker}: {exc}")
             combined["results"][ticker]["synthesis"] = "Synthesis unavailable."
+        _emit("synthesis", f"Synthesis done for {ticker}")
 
     # --- Step 4: Trader agent (position sizing + order proposals) ---
     logger.info("[orchestrator] Running trader agent")
     try:
         trader_result = run_trader_for_pipeline(combined)
 
-        # Flatten each order into the per-ticker result for easy dashboard access
         for order in trader_result.get("orders", []):
             t = order.get("ticker")
             if t and t in combined["results"]:
@@ -181,6 +202,7 @@ def run_full_analysis(
     except Exception as exc:
         logger.error(f"[orchestrator] Trader agent failed: {exc}")
         combined["trader"] = {"error": str(exc)}
+    _emit("trader", "Trader sizing complete")
 
     # --- Step 5: Portfolio validation (no LLM, just constraint checks) ---
     logger.info("[orchestrator] Running portfolio validation")
@@ -191,7 +213,6 @@ def run_full_analysis(
             if "trade_order" in combined["results"].get(t, {})
         ]
 
-        # Rebuild minimal recommendation list for the validator
         all_recs = [
             {"ticker": r.ticker, "conviction_score": r.conviction_score,
              "volatility": r.volatility, "signal": r.signal}
@@ -209,6 +230,7 @@ def run_full_analysis(
     except Exception as exc:
         logger.error(f"[orchestrator] Portfolio validation failed: {exc}")
         combined["risk_report"] = {"risk_level": "UNKNOWN", "warnings": [str(exc)], "metrics": {}}
+    _emit("validation", "Risk validation complete")
 
     # --- Step 6: Save to disk ---
     os.makedirs(output_dir, exist_ok=True)

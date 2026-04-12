@@ -295,10 +295,13 @@ def generate_trade_orders(weights_json: str, recommendations_json: str) -> str:
             "sizing_method_used": method,
         })
 
-    total_invested = round(sum(o["proposed_weight"] for o in orders), 6)
+    gross_long = round(sum(max(0.0, float(o["proposed_weight"])) for o in orders), 6)
+    gross_short = round(sum(max(0.0, -float(o["proposed_weight"])) for o in orders), 6)
 
     return json.dumps({
         "orders": orders,
-        "total_invested_pct": total_invested,
+        "total_invested_pct": gross_long,
+        "gross_long_pct": gross_long,
+        "gross_short_pct": gross_short,
         "sizing_method_used": method,
     })

@@ -13,7 +13,8 @@ except ImportError:  # pragma: no cover - optional fallback for non-uv runs
     def load_dotenv(*args, **kwargs):  # type: ignore[no-redef]
         return False
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# Repo root (parent of backend/) so .env at project root is loaded
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 @dataclass
@@ -135,6 +136,8 @@ class LLMConfig:
     model: str | None = None
     base_url: str | None = None
     api_key: str | None = None
+    """Groq / DeepSeek OpenAI-compatible API base URL when applicable."""
+    openai_base_url: str | None = None
 
 
 @dataclass
@@ -161,7 +164,7 @@ class AgentConfig:
 
 
 def config_from_env() -> AgentConfig:
-    load_dotenv(PROJECT_ROOT / ".env", override=False)
+    load_dotenv(REPO_ROOT / ".env", override=False)
 
     def _env_bool(name: str, default: bool = False) -> bool:
         value = os.getenv(name)
@@ -169,26 +172,25 @@ def config_from_env() -> AgentConfig:
             return default
         return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
-    provider = os.getenv("LLM_PROVIDER", "ollama").lower()
+    from llm_provider import resolve_llm
 
-    # pick the right model name and API key for the chosen provider
-    if provider == "ollama":
-        llm_model = os.getenv("OLLAMA_MODEL")
-        llm_api_key = None
-    elif provider == "groq":
-        llm_model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-        llm_api_key = os.getenv("GROQ_API_KEY")
-    else:  # gemini / google
-        llm_model = os.getenv("GEMINI_MODEL")
-        llm_api_key = os.getenv("GEMINI_API_KEY")
-
-    llm_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    resolved = resolve_llm()
+    provider = resolved.provider
+    llm_model = resolved.model
+    llm_api_key = resolved.api_key
+    llm_base_url = resolved.ollama_base_url
+    openai_compat = resolved.openai_compatible_base_url
+    if provider == "mistral":
+        m_base = os.getenv("MISTRAL_API_BASE_URL")
+        if m_base and m_base.strip():
+            openai_compat = m_base.strip().rstrip("/")
 
     llm_config = LLMConfig(
         provider=provider,
         model=llm_model,
         base_url=llm_base_url,
         api_key=llm_api_key,
+        openai_base_url=openai_compat,
         temperature=float(os.getenv("LLM_TEMPERATURE", "0.2")),
         max_tokens=int(os.getenv("LLM_MAX_TOKENS", "512")),
     )

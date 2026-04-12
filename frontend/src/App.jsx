@@ -1,12 +1,15 @@
-import { useState } from 'react'
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom'
+import { AnalysisSessionProvider } from './context/AnalysisSessionContext'
 import AnalysisPage from './pages/AnalysisPage'
 import HistoryPage from './pages/HistoryPage'
+import LongShortPage from './pages/LongShortPage'
+import PerformancePage from './pages/PerformancePage'
 import './index.css'
 
 export default function App() {
   return (
     <BrowserRouter>
+      <AnalysisSessionProvider>
       <div className="app-layout">
         {/* ── Sidebar ── */}
         <aside className="sidebar">
@@ -19,13 +22,19 @@ export default function App() {
             <li>
               <NavLink to="/" end className={({ isActive }) => isActive ? 'active' : ''}>
                 <span className="nav-icon">📊</span>
-                New Analysis
+                Run pipeline
               </NavLink>
             </li>
             <li>
               <NavLink to="/history" className={({ isActive }) => isActive ? 'active' : ''}>
                 <span className="nav-icon">📁</span>
                 Past Results
+              </NavLink>
+            </li>
+            <li>
+              <NavLink to="/performance" className={({ isActive }) => isActive ? 'active' : ''}>
+                <span className="nav-icon">📉</span>
+                Paper performance
               </NavLink>
             </li>
           </ul>
@@ -40,9 +49,12 @@ export default function App() {
           <Routes>
             <Route path="/" element={<AnalysisPage />} />
             <Route path="/history" element={<HistoryPage />} />
+            <Route path="/longshort" element={<LongShortPage />} />
+            <Route path="/performance" element={<PerformancePage />} />
           </Routes>
         </main>
       </div>
+      </AnalysisSessionProvider>
     </BrowserRouter>
   )
 }

@@ -3,9 +3,282 @@
 from __future__ import annotations
 
 import pandas as pd
-import pandas_ta as ta
 
 from ..config import IndicatorConfig
+
+
+def _sma(series: pd.Series, length: int) -> pd.Series:
+    return series.rolling(length, min_periods=length).mean()
+
+
+def _ema(series: pd.Series, length: int) -> pd.Series:
+    return series.ewm(span=length, adjust=False, min_periods=length).mean()
+
+
+def _rsi(close: pd.Series, length: int) -> pd.Series:
+    delta = close.diff()
+    gain = delta.clip(lower=0.0)
+    loss = (-delta).clip(lower=0.0)
+    avg_gain = gain.ewm(alpha=1 / length, adjust=False, min_periods=length).mean()
+    avg_loss = loss.ewm(alpha=1 / length, adjust=False, min_periods=length).mean()
+    rs = avg_gain / avg_loss.replace(0.0, pd.NA)
+    rsi = 100.0 - (100.0 / (1.0 + rs))
+    return rsi.astype("float64")
+
+
+def _macd(close: pd.Series, fast: int, slow: int, signal: int) -> pd.DataFrame:
+    ema_fast = _ema(close, fast)
+    ema_slow = _ema(close, slow)
+    macd = ema_fast - ema_slow
+    macd_signal = macd.ewm(span=signal, adjust=False, min_periods=signal).mean()
+    macd_hist = macd - macd_signal
+    return pd.DataFrame({"macd": macd, "macd_signal": macd_signal, "macd_hist": macd_hist})
+
+
+def _bbands(close: pd.Series, length: int, std: float) -> pd.DataFrame:
+    mid = close.rolling(length, min_periods=length).mean()
+    sd = close.rolling(length, min_periods=length).std(ddof=0)
+    upper = mid + (std * sd)
+    lower = mid - (std * sd)
+    return pd.DataFrame({"bb_lower": lower, "bb_mid": mid, "bb_upper": upper})
+
+
+def _true_range(high: pd.Series, low: pd.Series, close: pd.Series) -> pd.Series:
+    prev_close = close.shift(1)
+    tr = pd.concat(
+        [(high - low).abs(), (high - prev_close).abs(), (low - prev_close).abs()],
+        axis=1,
+    ).max(axis=1)
+    return tr
+
+
+def _atr(high: pd.Series, low: pd.Series, close: pd.Series, length: int) -> pd.Series:
+    tr = _true_range(high, low, close)
+    return tr.ewm(alpha=1 / length, adjust=False, min_periods=length).mean()
+
+
+def _adx(high: pd.Series, low: pd.Series, close: pd.Series, length: int) -> pd.DataFrame:
+    up_move = high.diff()
+    down_move = -low.diff()
+
+    plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
+    minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
+
+    atr = _atr(high, low, close, length)
+    plus_di = 100.0 * (plus_dm.ewm(alpha=1 / length, adjust=False, min_periods=length).mean() / atr)
+    minus_di = 100.0 * (minus_dm.ewm(alpha=1 / length, adjust=False, min_periods=length).mean() / atr)
+
+    dx = (100.0 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0.0, pd.NA)).astype(
+        "float64"
+    )
+    adx = dx.ewm(alpha=1 / length, adjust=False, min_periods=length).mean()
+    return pd.DataFrame(
+        {f"adx_{length}": adx, f"plus_di_{length}": plus_di, f"minus_di_{length}": minus_di}
+    )
+
+
+def _stoch(
+    high: pd.Series, low: pd.Series, close: pd.Series, k: int, d: int, smooth_k: int
+) -> pd.DataFrame:
+    lowest_low = low.rolling(k, min_periods=k).min()
+    highest_high = high.rolling(k, min_periods=k).max()
+    raw_k = 100.0 * (close - lowest_low) / (highest_high - lowest_low).replace(0.0, pd.NA)
+    smoothed_k = raw_k.rolling(smooth_k, min_periods=smooth_k).mean()
+    stoch_d = smoothed_k.rolling(d, min_periods=d).mean()
+    return pd.DataFrame({"stoch_k": smoothed_k, "stoch_d": stoch_d})
+
+
+def _cci(high: pd.Series, low: pd.Series, close: pd.Series, length: int) -> pd.Series:
+    tp = (high + low + close) / 3.0
+    sma = tp.rolling(length, min_periods=length).mean()
+    mad = (tp - sma).abs().rolling(length, min_periods=length).mean()
+    cci = (tp - sma) / (0.015 * mad.replace(0.0, pd.NA))
+    return cci.astype("float64")
+
+
+def _roc(close: pd.Series, length: int) -> pd.Series:
+    prev = close.shift(length)
+    return (100.0 * (close - prev) / prev.replace(0.0, pd.NA)).astype("float64")
+
+
+def _willr(high: pd.Series, low: pd.Series, close: pd.Series, length: int) -> pd.Series:
+    highest_high = high.rolling(length, min_periods=length).max()
+    lowest_low = low.rolling(length, min_periods=length).min()
+    return (-100.0 * (highest_high - close) / (highest_high - lowest_low).replace(0.0, pd.NA)).astype(
+        "float64"
+    )
+
+
+def _mfi(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series, length: int) -> pd.Series:
+    tp = (high + low + close) / 3.0
+    rmf = tp * volume
+    direction = tp.diff()
+    pos_mf = rmf.where(direction > 0, 0.0)
+    neg_mf = rmf.where(direction < 0, 0.0)
+    pos_sum = pos_mf.rolling(length, min_periods=length).sum()
+    neg_sum = neg_mf.abs().rolling(length, min_periods=length).sum()
+    mfr = pos_sum / neg_sum.replace(0.0, pd.NA)
+    mfi = 100.0 - (100.0 / (1.0 + mfr))
+    return mfi.astype("float64")
+
+
+def _obv(close: pd.Series, volume: pd.Series) -> pd.Series:
+    direction = close.diff().fillna(0.0).apply(lambda x: 1.0 if x > 0 else (-1.0 if x < 0 else 0.0))
+    return (direction * volume).cumsum().astype("float64")
+
+
+def _vwap(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series) -> pd.Series:
+    tp = (high + low + close) / 3.0
+    cum_pv = (tp * volume).cumsum()
+    cum_v = volume.cumsum().replace(0.0, pd.NA)
+    return (cum_pv / cum_v).astype("float64")
+
+
+def _ichimoku(
+    high: pd.Series,
+    low: pd.Series,
+    close: pd.Series,
+    tenkan: int,
+    kijun: int,
+    senkou: int,
+) -> pd.DataFrame:
+    tenkan_sen = (high.rolling(tenkan, min_periods=tenkan).max() + low.rolling(tenkan, min_periods=tenkan).min()) / 2.0
+    kijun_sen = (high.rolling(kijun, min_periods=kijun).max() + low.rolling(kijun, min_periods=kijun).min()) / 2.0
+    span_a = ((tenkan_sen + kijun_sen) / 2.0).shift(senkou)
+    span_b = ((high.rolling(senkou, min_periods=senkou).max() + low.rolling(senkou, min_periods=senkou).min()) / 2.0).shift(senkou)
+    chikou = close.shift(-senkou)
+    return pd.DataFrame(
+        {
+            "ichimoku_tenkan": tenkan_sen,
+            "ichimoku_kijun": kijun_sen,
+            "ichimoku_chikou": chikou,
+            "ichimoku_span_a": span_a,
+            "ichimoku_span_b": span_b,
+        }
+    )
+
+
+def _donchian(high: pd.Series, low: pd.Series, length: int) -> pd.DataFrame:
+    lower = low.rolling(length, min_periods=length).min()
+    upper = high.rolling(length, min_periods=length).max()
+    mid = (lower + upper) / 2.0
+    return pd.DataFrame({"donchian_lower": lower, "donchian_mid": mid, "donchian_upper": upper})
+
+
+def _keltner(
+    high: pd.Series,
+    low: pd.Series,
+    close: pd.Series,
+    length: int,
+    scalar: float,
+) -> pd.DataFrame:
+    mid = _ema(close, length)
+    atr = _atr(high, low, close, length)
+    upper = mid + (scalar * atr)
+    lower = mid - (scalar * atr)
+    return pd.DataFrame({"keltner_lower": lower, "keltner_mid": mid, "keltner_upper": upper})
+
+
+def _psar(
+    high: pd.Series,
+    low: pd.Series,
+    step: float,
+    max_step: float,
+) -> pd.DataFrame:
+    if high.empty:
+        return pd.DataFrame(index=high.index, columns=["psar", "psar_direction"], dtype="float64")
+
+    psar = pd.Series(index=high.index, dtype="float64")
+    direction = pd.Series(index=high.index, dtype="float64")
+
+    # initialize with first two bars
+    bull = True
+    af = step
+    ep = high.iloc[0]
+    psar.iloc[0] = low.iloc[0]
+    direction.iloc[0] = 1.0
+
+    for i in range(1, len(high)):
+        prev_psar = psar.iloc[i - 1]
+        if bull:
+            psar_i = prev_psar + af * (ep - prev_psar)
+            psar_i = min(psar_i, low.iloc[i - 1], low.iloc[i])
+            if low.iloc[i] < psar_i:
+                bull = False
+                psar_i = ep
+                ep = low.iloc[i]
+                af = step
+            else:
+                if high.iloc[i] > ep:
+                    ep = high.iloc[i]
+                    af = min(max_step, af + step)
+        else:
+            psar_i = prev_psar + af * (ep - prev_psar)
+            psar_i = max(psar_i, high.iloc[i - 1], high.iloc[i])
+            if high.iloc[i] > psar_i:
+                bull = True
+                psar_i = ep
+                ep = high.iloc[i]
+                af = step
+            else:
+                if low.iloc[i] < ep:
+                    ep = low.iloc[i]
+                    af = min(max_step, af + step)
+
+        psar.iloc[i] = psar_i
+        direction.iloc[i] = 1.0 if bull else -1.0
+
+    return pd.DataFrame({"psar": psar, "psar_direction": direction})
+
+
+def _supertrend(
+    high: pd.Series,
+    low: pd.Series,
+    close: pd.Series,
+    length: int,
+    multiplier: float,
+) -> pd.DataFrame:
+    atr = _atr(high, low, close, length)
+    hl2 = (high + low) / 2.0
+    upperband = hl2 + (multiplier * atr)
+    lowerband = hl2 - (multiplier * atr)
+
+    st = pd.Series(index=close.index, dtype="float64")
+    direction = pd.Series(index=close.index, dtype="float64")
+
+    for i in range(len(close)):
+        if i == 0:
+            st.iloc[i] = upperband.iloc[i]
+            direction.iloc[i] = 1.0
+            continue
+
+        prev_st = st.iloc[i - 1]
+        prev_dir = direction.iloc[i - 1]
+
+        ub = upperband.iloc[i]
+        lb = lowerband.iloc[i]
+
+        if prev_dir > 0:
+            lb = max(lb, lowerband.iloc[i - 1]) if pd.notna(lowerband.iloc[i - 1]) else lb
+            if close.iloc[i] < lb:
+                direction.iloc[i] = -1.0
+                st.iloc[i] = ub
+            else:
+                direction.iloc[i] = 1.0
+                st.iloc[i] = lb
+        else:
+            ub = min(ub, upperband.iloc[i - 1]) if pd.notna(upperband.iloc[i - 1]) else ub
+            if close.iloc[i] > ub:
+                direction.iloc[i] = 1.0
+                st.iloc[i] = lb
+            else:
+                direction.iloc[i] = -1.0
+                st.iloc[i] = ub
+
+        if pd.isna(prev_st):
+            st.iloc[i] = ub if direction.iloc[i] < 0 else lb
+
+    return pd.DataFrame({"supertrend": st, "supertrend_direction": direction})
 
 
 def _column_match(df: pd.DataFrame, contains: str) -> pd.Series | None:
@@ -39,45 +312,35 @@ def compute_indicators(
     data["returns"] = data["close"].pct_change()
 
     for period in config.sma_periods:
-        data[f"sma_{period}"] = ta.sma(data["close"], length=period)
+        data[f"sma_{period}"] = _sma(data["close"], length=period)
 
     for period in config.ema_periods:
-        data[f"ema_{period}"] = ta.ema(data["close"], length=period)
+        data[f"ema_{period}"] = _ema(data["close"], length=period)
 
-    data[f"rsi_{config.rsi_period}"] = ta.rsi(data["close"], length=config.rsi_period)
+    data[f"rsi_{config.rsi_period}"] = _rsi(data["close"], length=config.rsi_period)
 
-    macd = ta.macd(
-        data["close"],
-        fast=config.macd_fast,
-        slow=config.macd_slow,
-        signal=config.macd_signal,
+    macd = _macd(
+        data["close"], fast=config.macd_fast, slow=config.macd_slow, signal=config.macd_signal
     )
-    if macd is not None and not macd.empty:
-        data["macd"] = macd.iloc[:, 0]
-        data["macd_signal"] = macd.iloc[:, 1]
-        data["macd_hist"] = macd.iloc[:, 2]
+    data["macd"] = macd["macd"]
+    data["macd_signal"] = macd["macd_signal"]
+    data["macd_hist"] = macd["macd_hist"]
 
-    bbands = ta.bbands(
-        data["close"], length=config.bb_length, std=config.bb_std
-    )
-    if bbands is not None and not bbands.empty:
-        data["bb_lower"] = bbands.iloc[:, 0]
-        data["bb_mid"] = bbands.iloc[:, 1]
-        data["bb_upper"] = bbands.iloc[:, 2]
+    bbands = _bbands(data["close"], length=config.bb_length, std=config.bb_std)
+    data["bb_lower"] = bbands["bb_lower"]
+    data["bb_mid"] = bbands["bb_mid"]
+    data["bb_upper"] = bbands["bb_upper"]
 
-    data[f"atr_{config.atr_period}"] = ta.atr(
+    data[f"atr_{config.atr_period}"] = _atr(
         data["high"], data["low"], data["close"], length=config.atr_period
     )
 
-    adx = ta.adx(
-        data["high"], data["low"], data["close"], length=config.adx_period
-    )
-    if adx is not None and not adx.empty:
-        data[f"adx_{config.adx_period}"] = adx.iloc[:, 0]
-        data[f"plus_di_{config.adx_period}"] = adx.iloc[:, 1]
-        data[f"minus_di_{config.adx_period}"] = adx.iloc[:, 2]
+    adx = _adx(data["high"], data["low"], data["close"], length=config.adx_period)
+    data[f"adx_{config.adx_period}"] = adx[f"adx_{config.adx_period}"]
+    data[f"plus_di_{config.adx_period}"] = adx[f"plus_di_{config.adx_period}"]
+    data[f"minus_di_{config.adx_period}"] = adx[f"minus_di_{config.adx_period}"]
 
-    stoch = ta.stoch(
+    stoch = _stoch(
         data["high"],
         data["low"],
         data["close"],
@@ -85,20 +348,17 @@ def compute_indicators(
         d=config.stoch_d,
         smooth_k=config.stoch_smooth,
     )
-    if stoch is not None and not stoch.empty:
-        data["stoch_k"] = stoch.iloc[:, 0]
-        data["stoch_d"] = stoch.iloc[:, 1]
+    data["stoch_k"] = stoch["stoch_k"]
+    data["stoch_d"] = stoch["stoch_d"]
 
-    data[f"cci_{config.cci_period}"] = ta.cci(
+    data[f"cci_{config.cci_period}"] = _cci(
         data["high"], data["low"], data["close"], length=config.cci_period
     )
-    data[f"roc_{config.roc_period}"] = ta.roc(
-        data["close"], length=config.roc_period
-    )
-    data[f"willr_{config.willr_period}"] = ta.willr(
+    data[f"roc_{config.roc_period}"] = _roc(data["close"], length=config.roc_period)
+    data[f"willr_{config.willr_period}"] = _willr(
         data["high"], data["low"], data["close"], length=config.willr_period
     )
-    data[f"mfi_{config.mfi_period}"] = ta.mfi(
+    data[f"mfi_{config.mfi_period}"] = _mfi(
         data["high"],
         data["low"],
         data["close"],
@@ -106,14 +366,12 @@ def compute_indicators(
         length=config.mfi_period,
     )
 
-    data["obv"] = ta.obv(data["close"], data["volume"])
+    data["obv"] = _obv(data["close"], data["volume"])
 
     if config.vwap_enabled:
-        data["vwap"] = ta.vwap(
-            data["high"], data["low"], data["close"], data["volume"]
-        )
+        data["vwap"] = _vwap(data["high"], data["low"], data["close"], data["volume"])
 
-    ichimoku = ta.ichimoku(
+    ichimoku = _ichimoku(
         data["high"],
         data["low"],
         data["close"],
@@ -121,105 +379,41 @@ def compute_indicators(
         kijun=config.ichimoku_kijun,
         senkou=config.ichimoku_senkou,
     )
-    if ichimoku is not None:
-        if isinstance(ichimoku, tuple):
-            ichi_df = ichimoku[0]
-            span_df = ichimoku[1] if len(ichimoku) > 1 else None
-        else:
-            ichi_df = ichimoku
-            span_df = None
-        if ichi_df is not None and not ichi_df.empty:
-            data["ichimoku_tenkan"] = ichi_df.iloc[:, 0]
-            if ichi_df.shape[1] > 1:
-                data["ichimoku_kijun"] = ichi_df.iloc[:, 1]
-            if ichi_df.shape[1] > 2:
-                data["ichimoku_chikou"] = ichi_df.iloc[:, 2]
-        if span_df is not None and not span_df.empty:
-            data["ichimoku_span_a"] = span_df.iloc[:, 0]
-            if span_df.shape[1] > 1:
-                data["ichimoku_span_b"] = span_df.iloc[:, 1]
+    data["ichimoku_tenkan"] = ichimoku["ichimoku_tenkan"]
+    data["ichimoku_kijun"] = ichimoku["ichimoku_kijun"]
+    data["ichimoku_chikou"] = ichimoku["ichimoku_chikou"]
+    data["ichimoku_span_a"] = ichimoku["ichimoku_span_a"]
+    data["ichimoku_span_b"] = ichimoku["ichimoku_span_b"]
 
-    supertrend = ta.supertrend(
+    supertrend = _supertrend(
         data["high"],
         data["low"],
         data["close"],
         length=config.supertrend_period,
         multiplier=config.supertrend_multiplier,
     )
-    if supertrend is not None and not supertrend.empty:
-        sup = _first_non_none(_column_match(supertrend, "SUPERT_"), supertrend.iloc[:, 0])
-        sup_dir = _first_non_none(
-            _column_match(supertrend, "SUPERTd"),
-            supertrend.iloc[:, 1] if supertrend.shape[1] > 1 else None,
-        )
-        if sup is not None:
-            data["supertrend"] = sup
-        if sup_dir is not None:
-            data["supertrend_direction"] = sup_dir
+    data["supertrend"] = supertrend["supertrend"]
+    data["supertrend_direction"] = supertrend["supertrend_direction"]
 
-    donchian = ta.donchian(
-        data["high"], data["low"], length=config.donchian_length
-    )
-    if donchian is not None and not donchian.empty:
-        dcl = _first_non_none(_column_match(donchian, "DCL"), donchian.iloc[:, 0])
-        dcm = _first_non_none(
-            _column_match(donchian, "DCM"),
-            donchian.iloc[:, 1] if donchian.shape[1] > 1 else None,
-        )
-        dch = _first_non_none(
-            _column_match(donchian, "DCH"),
-            donchian.iloc[:, 2] if donchian.shape[1] > 2 else None,
-        )
-        if dcl is not None:
-            data["donchian_lower"] = dcl
-        if dcm is not None:
-            data["donchian_mid"] = dcm
-        if dch is not None:
-            data["donchian_upper"] = dch
+    donchian = _donchian(data["high"], data["low"], length=config.donchian_length)
+    data["donchian_lower"] = donchian["donchian_lower"]
+    data["donchian_mid"] = donchian["donchian_mid"]
+    data["donchian_upper"] = donchian["donchian_upper"]
 
-    keltner = ta.kc(
+    keltner = _keltner(
         data["high"],
         data["low"],
         data["close"],
         length=config.keltner_length,
         scalar=config.keltner_scalar,
     )
-    if keltner is not None and not keltner.empty:
-        kcl = _first_non_none(_column_match(keltner, "KCL"), keltner.iloc[:, 0])
-        kcm = _first_non_none(
-            _column_match(keltner, "KCB"),
-            keltner.iloc[:, 1] if keltner.shape[1] > 1 else None,
-        )
-        kcu = _first_non_none(
-            _column_match(keltner, "KCU"),
-            keltner.iloc[:, 2] if keltner.shape[1] > 2 else None,
-        )
-        if kcl is not None:
-            data["keltner_lower"] = kcl
-        if kcm is not None:
-            data["keltner_mid"] = kcm
-        if kcu is not None:
-            data["keltner_upper"] = kcu
+    data["keltner_lower"] = keltner["keltner_lower"]
+    data["keltner_mid"] = keltner["keltner_mid"]
+    data["keltner_upper"] = keltner["keltner_upper"]
 
-    psar = ta.psar(
-        data["high"],
-        data["low"],
-        data["close"],
-        step=config.psar_step,
-        max_step=config.psar_max_step,
-    )
-    if psar is not None and not psar.empty:
-        psar_l = _column_match(psar, "PSARl")
-        psar_s = _column_match(psar, "PSARs")
-        if psar_l is not None or psar_s is not None:
-            data["psar"] = (psar_l if psar_l is not None else psar_s).combine_first(
-                psar_s if psar_s is not None else psar_l
-            )
-            if psar_l is not None and psar_s is not None:
-                direction = pd.Series(index=psar.index, dtype="float64")
-                direction[psar_l.notna()] = 1.0
-                direction[psar_s.notna()] = -1.0
-                data["psar_direction"] = direction
+    psar = _psar(data["high"], data["low"], step=config.psar_step, max_step=config.psar_max_step)
+    data["psar"] = psar["psar"]
+    data["psar_direction"] = psar["psar_direction"]
 
     if config.pivot_lookback >= 1:
         shift = int(config.pivot_lookback)

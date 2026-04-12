@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from contextlib import nullcontext
 from typing import Dict, List
 
@@ -16,6 +17,29 @@ from .prompts import TECHNICAL_SUMMARY_SYSTEM_PROMPT, build_summary_prompt
 from .observability.tracing import TraceRuntime
 from .tools import compute_indicators, fetch_ohlcv_data, generate_signals
 from .shared.serialization import dumps_json, to_serializable
+from streaming_context import emit_llm_chunk, emit_llm_end, emit_llm_start
+
+logger = logging.getLogger(__name__)
+
+
+def _normalize_stream_chunk_content(chunk: object) -> str:
+    c = getattr(chunk, "content", None)
+    if c is None:
+        return ""
+    if isinstance(c, str):
+        return c
+    if isinstance(c, list):
+        parts: List[str] = []
+        for part in c:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict):
+                parts.append(str(part.get("text", "")))
+            else:
+                t = getattr(part, "text", None)
+                parts.append(str(t) if t else "")
+        return "".join(parts)
+    return str(c)
 
 
 def _append_errors(state: TechnicalState, new_errors: List[str]) -> List[str]:
@@ -187,15 +211,37 @@ def build_graph(agent_config: AgentConfig):
                 else None
             )
             with span_ctx if span_ctx is not None else nullcontext() as span:
+                messages = [
+                    SystemMessage(content=TECHNICAL_SUMMARY_SYSTEM_PROMPT),
+                    HumanMessage(content=prompt),
+                ]
                 try:
-                    response = llm.invoke(
-                        [
-                            SystemMessage(content=TECHNICAL_SUMMARY_SYSTEM_PROMPT),
-                            HumanMessage(content=prompt),
-                        ],
-                        config=llm_config,
-                    )
-                    summaries[symbol] = response.content.strip()
+                    emit_llm_start(pipeline="technical", agent="summary", ticker=symbol)
+                    acc: List[str] = []
+                    try:
+                        for chunk in llm.stream(messages, config=llm_config):
+                            piece = _normalize_stream_chunk_content(chunk)
+                            if piece:
+                                acc.append(piece)
+                                emit_llm_chunk(
+                                    pipeline="technical",
+                                    agent="summary",
+                                    ticker=symbol,
+                                    chunk=piece,
+                                )
+                        summaries[symbol] = "".join(acc).strip()
+                    except Exception as stream_exc:
+                        logger.warning(
+                            "LLM stream failed for %s, using invoke: %s",
+                            symbol,
+                            stream_exc,
+                        )
+                        response = llm.invoke(messages, config=llm_config)
+                        raw = getattr(response, "content", None) or ""
+                        summaries[symbol] = (
+                            raw.strip() if isinstance(raw, str) else str(raw).strip()
+                        )
+                    emit_llm_end(pipeline="technical", agent="summary", ticker=symbol)
                     if span_ctx is not None:
                         span.set_output({"symbol": symbol, "summary": summaries[symbol]})
                 except Exception as exc:

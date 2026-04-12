@@ -23,9 +23,12 @@ class StockRecommendation(BaseModel):
     )
     current_weight: float = Field(
         default=0.0,
-        ge=0.0,
+        ge=-1.0,
         le=1.0,
-        description="Current portfolio weight as a decimal, e.g. 0.05 for 5%",
+        description=(
+            "Current portfolio weight as a decimal. Positive = long, negative = short "
+            "(e.g. 0.05 for +5% long, -0.02 for -2% short)."
+        ),
     )
 
 
@@ -47,7 +50,10 @@ class TradeOrder(BaseModel):
     ticker: str
     action: Literal["BUY", "SELL", "HOLD"]
     proposed_weight: float = Field(
-        ..., description="Target portfolio weight as a decimal after rebalancing"
+        ...,
+        ge=-1.0,
+        le=1.0,
+        description="Target portfolio weight as a decimal after rebalancing (negative = short).",
     )
     weight_delta: float = Field(
         ..., description="Change in weight from current: positive = buy more, negative = sell"
@@ -71,5 +77,11 @@ class TraderOutput(BaseModel):
         ..., description="Narrative explaining the overall trading strategy for this batch"
     )
     total_invested_pct: float = Field(
-        ..., description="Sum of all proposed weights (should be <= 1.0)"
+        ...,
+        description="Gross long exposure: sum of max(0, proposed_weight) across orders.",
+    )
+    gross_short_pct: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Gross short exposure: sum of max(0, -proposed_weight) across orders.",
     )

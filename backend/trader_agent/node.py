@@ -16,6 +16,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from streaming_context import emit_stage
+
 from .adapter import build_research_output
 from .agent import run_trader_agent
 
@@ -75,6 +77,11 @@ def run_trader_for_pipeline(
         TraderOutput as a plain dict, or {"error": ...} if the agent failed.
     """
     try:
+        emit_stage(
+            pipeline="trader",
+            label="Trader agent (ReAct + sizing tools)",
+            ticker=None,
+        )
         research_output = build_research_output(combined_results, current_weights or {})
         trader_output   = run_trader_agent(research_output)
         logger.info(
