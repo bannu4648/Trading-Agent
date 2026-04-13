@@ -13,6 +13,8 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    outputs:
+      cloudflare_url: ${{ steps.get_url.outputs.cloudflare_url }}
 
     steps:
       - name: Deploy to EC2 via SSH
@@ -47,6 +49,38 @@ jobs:
 
             # Wait for Cloudflare URL to appear
             sleep 8
+            CLOUDFLARE_URL=$(grep -o 'https://[^ ]*\.trycloudflare\.com' ~/cloudflare.log || echo "")
             echo "✅ Backend redeployed at $(date)"
-            echo "🌐 Cloudflare URL:"
-            grep -o 'https://[^ ]*\.trycloudflare\.com' ~/cloudflare.log || echo "URL not ready yet — run: tail ~/cloudflare.log"
+            echo "🌐 Cloudflare URL: $CLOUDFLARE_URL"
+            echo "$CLOUDFLARE_URL" > ~/cloudflare_url.txt
+
+      - name: Read Cloudflare URL
+        id: get_url
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          result_format: json
+          script: echo "cloudflare_url=$(cat ~/cloudflare_url.txt)"
+
+  update-frontend:
+    runs-on: ubuntu-latest
+    needs: deploy
+
+    steps:
+      - name: Update VITE_API_BASE on Render
+        run: |
+          CLOUDFLARE_URL="${{ needs.deploy.outputs.cloudflare_url }}"
+          echo "Updating Render with URL: $CLOUDFLARE_URL"
+          curl -s -X PUT "https://api.render.com/v1/services/${{ secrets.RENDER_SERVICE_ID }}/env-vars" \
+            -H "Authorization: Bearer ${{ secrets.RENDER_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "[{\"key\": \"VITE_API_BASE\", \"value\": \"$CLOUDFLARE_URL\"}]"
+
+      - name: Trigger Render Frontend Redeploy
+        run: |
+          curl -s -X POST "https://api.render.com/v1/services/${{ secrets.RENDER_SERVICE_ID }}/deploys" \
+            -H "Authorization: Bearer ${{ secrets.RENDER_API_KEY }}" \
+            -H "Content-Type: application/json"
+          echo "✅ Render frontend redeploy triggered"
