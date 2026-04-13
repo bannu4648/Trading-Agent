@@ -103,6 +103,7 @@ export default function AnalysisPage() {
     const [stageLines, setStageLines] = useState([]);
     const [streamError, setStreamError] = useState(null);
     const [activeJobId, setActiveJobId] = useState(null);
+    const [latestJobId, setLatestJobId] = useState(null);
 
     const pollRef = useRef(null);
     const streamAbortRef = useRef(null);
@@ -139,11 +140,13 @@ export default function AnalysisPage() {
         if (session.stageLines != null) setStageLines(session.stageLines);
         if (session.streamError != null) setStreamError(session.streamError);
 
-        if (session.status === 'running' && session.activeJobId) {
+        const resumeJobId = session.activeJobId || session.latestJobId || null;
+        if (session.status === 'running' && resumeJobId) {
             setResults(session.results ?? null);
             setPartialResults(session.partialResults ?? null);
             setFailureError(session.failureError ?? null);
-            setActiveJobId(session.activeJobId);
+            setActiveJobId(resumeJobId);
+            setLatestJobId(resumeJobId);
             setStatus('running');
             setStatusMsg(
                 session.statusMsg ||
@@ -153,10 +156,14 @@ export default function AnalysisPage() {
             setResults(session.results ?? null);
             setPartialResults(session.partialResults ?? null);
             setFailureError(null);
-            setStatus('failed');
             setActiveJobId(null);
+            // Avoid a false "failed" state if navigation happened before job_id was persisted.
+            // Keep whatever partial snapshot exists, but let users start a fresh run.
+            setStatus('idle');
             setStatusMsg(
-                'Previous run was still in progress when you left this page; polling had stopped. Partial data may appear below — start a new run to finish.',
+                session.partialResults || session.results
+                    ? 'A previous run snapshot was restored. If needed, start a new run to continue.'
+                    : '',
             );
         } else {
             setStatus(session.status ?? 'idle');
@@ -165,6 +172,7 @@ export default function AnalysisPage() {
             setPartialResults(session.partialResults ?? null);
             setFailureError(session.failureError ?? null);
             setActiveJobId(null);
+            setLatestJobId(session.latestJobId ?? null);
         }
     }, [session, setSearchParams]);
 
@@ -197,6 +205,7 @@ export default function AnalysisPage() {
             stageLines,
             streamError,
             activeJobId,
+            latestJobId,
         });
     }, [
         mergeSession,
@@ -220,6 +229,7 @@ export default function AnalysisPage() {
         stageLines,
         streamError,
         activeJobId,
+        latestJobId,
     ]);
 
     useEffect(
@@ -295,6 +305,7 @@ export default function AnalysisPage() {
         setStreamError(null);
         setMainTab('live');
         setActiveJobId(null);
+        setLatestJobId(null);
 
         const modeMeta = PIPELINE_MODES[pipelineMode];
         setStatusMsg(`Starting ${modeMeta.label}…`);
@@ -328,6 +339,7 @@ export default function AnalysisPage() {
             }
 
             setActiveJobId(job_id);
+            setLatestJobId(job_id);
         } catch (err) {
             setStatus('failed');
             setStatusMsg(`Failed to start: ${err.message}`);
@@ -456,6 +468,7 @@ export default function AnalysisPage() {
         setStageLines([]);
         setStreamError(null);
         setMainTab('live');
+        setLatestJobId(null);
     }, [clearSession]);
 
     return (

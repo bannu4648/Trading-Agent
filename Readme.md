@@ -65,6 +65,8 @@ Trading-Agent/
 
 **Pipeline details (stages, top‑20 vs custom, why some tickers show N/A):** see [docs/PIPELINE.md](docs/PIPELINE.md).
 
+**End-to-end guide with architecture diagrams (Mermaid):** [docs/PROJECT_README.md](docs/PROJECT_README.md).
+
 ### API Endpoints
 
 | Method | Path | Description |
