@@ -593,10 +593,23 @@ def start_top20_longshort(req: Top20LongShortRequest):
 def start_sp500_screened(req: Sp500ScreenedRequest):
     """Launch S&P 500 screened pipeline (wide technicals → screen → deep dive) in the background."""
     job_id = str(uuid.uuid4())
+    init_partial: Dict[str, Any] = {
+        "metadata": {
+            "pipeline_step": "init",
+            "pipeline_step_label": "Queued — preparing S&P 500 screened pipeline…",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "tickers": [],
+            "universe": "sp500_screened",
+            "max_candidates": req.max_candidates,
+            "limit_universe": int(req.limit_universe),
+            "enable_llm_summary_technical": bool(req.enable_llm_summary_technical),
+        },
+        "results": {},
+    }
     _jobs[job_id] = {
         "status": "running",
         "result": None,
-        "partial_result": None,
+        "partial_result": init_partial,
         "error": None,
         "tickers": [],
         "started_at": datetime.now(timezone.utc).isoformat(),
