@@ -14,7 +14,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     outputs:
-      cloudflare_url: ${{ steps.get_url.outputs.cloudflare_url }}
+      cloudflare_url: ${{ steps.export_url.outputs.cloudflare_url }}
 
     steps:
       - name: Deploy to EC2 via SSH
@@ -61,8 +61,15 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY }}
-          result_format: json
-          script: echo "cloudflare_url=$(cat ~/cloudflare_url.txt)"
+          script: cat ~/cloudflare_url.txt
+
+      - name: Export Cloudflare URL as output
+        id: export_url
+        run: |
+          # The SSH action prints stdout — capture last non-empty line
+          CF_URL=$(ssh -o StrictHostKeyChecking=no -i <(echo "${{ secrets.EC2_SSH_KEY }}") ec2-user@${{ secrets.EC2_HOST }} "cat ~/cloudflare_url.txt")
+          echo "cloudflare_url=$CF_URL" >> $GITHUB_OUTPUT
+          echo "Captured URL: $CF_URL"
 
   update-frontend:
     runs-on: ubuntu-latest
