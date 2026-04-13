@@ -1,5 +1,7 @@
+// Set VITE_API_BASE in your deployment environment (Render/Netlify env vars)
+// For local dev, falls back to localhost automatically
 const API_BASE = import.meta.env.VITE_API_BASE
-  ?? (import.meta.env.DEV ? 'http://localhost:8000' : 'https://trading-agent-backend.onrender.com');
+  ?? (import.meta.env.DEV ? 'http://localhost:8000' : '');
 
 /** First status check after starting a job (quick initial partial snapshot). */
 export const JOB_STATUS_FIRST_POLL_MS = 3_000;
