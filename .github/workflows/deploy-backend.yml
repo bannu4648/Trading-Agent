@@ -22,11 +22,11 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             set -e
+            export PATH="$HOME/.local/bin:$PATH"
             cd ~/Trading-Agent
             git pull origin main
-            source $HOME/.local/bin/env
             uv sync
             screen -S backend -X quit || true
             sleep 1
-            screen -dmS backend bash -c "cd ~/Trading-Agent && uv run uvicorn backend.main:app --host 0.0.0.0 --port 8000 >> ~/backend.log 2>&1"
+            screen -dmS backend bash -c "export PATH=$HOME/.local/bin:$PATH && cd ~/Trading-Agent && set -a && source .env && set +a && uv run uvicorn backend.main:app --host 0.0.0.0 --port 8000 >> ~/backend.log 2>&1"
             echo "✅ Backend redeployed at $(date)"
