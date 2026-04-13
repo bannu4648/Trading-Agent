@@ -66,8 +66,10 @@ jobs:
 
       - name: Export Cloudflare URL as output
         id: export_url
+        env:
+          SSH_OUTPUT: ${{ steps.get_url.outputs.output }}
         run: |
-          CF_URL=$(echo '${{ steps.get_url.outputs.output }}' | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['stdout'].strip())")
+          CF_URL=$(echo "$SSH_OUTPUT" | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['stdout'].strip())")
           echo "cloudflare_url=$CF_URL" >> $GITHUB_OUTPUT
           echo "Captured URL: $CF_URL"
 
