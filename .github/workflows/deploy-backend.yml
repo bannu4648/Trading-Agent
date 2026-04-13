@@ -61,13 +61,13 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY }}
+          result_format: json
           script: cat ~/cloudflare_url.txt
 
       - name: Export Cloudflare URL as output
         id: export_url
         run: |
-          # The SSH action prints stdout — capture last non-empty line
-          CF_URL=$(ssh -o StrictHostKeyChecking=no -i <(echo "${{ secrets.EC2_SSH_KEY }}") ec2-user@${{ secrets.EC2_HOST }} "cat ~/cloudflare_url.txt")
+          CF_URL=$(echo '${{ steps.get_url.outputs.output }}' | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['stdout'].strip())")
           echo "cloudflare_url=$CF_URL" >> $GITHUB_OUTPUT
           echo "Captured URL: $CF_URL"
 
