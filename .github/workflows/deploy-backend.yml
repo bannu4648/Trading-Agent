@@ -24,10 +24,29 @@ jobs:
           script: |
             set -e
             export PATH="$HOME/.local/bin:$PATH"
+
+            # Pull latest code
             cd ~/Trading-Agent
             git pull origin main
             uv sync
-            screen -S backend -X quit || true
+
+            # Kill all stale backend screen sessions
+            screen -ls | grep backend | awk '{print $1}' | xargs -I{} screen -S {} -X quit || true
             sleep 1
+
+            # Kill all stale cloudflare screen sessions
+            screen -ls | grep cloudflare | awk '{print $1}' | xargs -I{} screen -S {} -X quit || true
+            sleep 1
+
+            # Start backend
             screen -dmS backend bash -c "export PATH=$HOME/.local/bin:$PATH && cd ~/Trading-Agent && set -a && source .env && set +a && uv run uvicorn backend.main:app --host 0.0.0.0 --port 8000 >> ~/backend.log 2>&1"
+
+            # Start Cloudflare tunnel
+            > ~/cloudflare.log
+            screen -dmS cloudflare bash -c "cloudflared tunnel --url http://localhost:8000 >> ~/cloudflare.log 2>&1"
+
+            # Wait for Cloudflare URL to appear
+            sleep 8
             echo "✅ Backend redeployed at $(date)"
+            echo "🌐 Cloudflare URL:"
+            grep -o 'https://[^ ]*\.trycloudflare\.com' ~/cloudflare.log || echo "URL not ready yet — run: tail ~/cloudflare.log"
