@@ -54,22 +54,17 @@ jobs:
             echo "🌐 Cloudflare URL: $CLOUDFLARE_URL"
             echo "$CLOUDFLARE_URL" > ~/cloudflare_url.txt
 
-      - name: Read Cloudflare URL
-        id: get_url
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ec2-user
-          key: ${{ secrets.EC2_SSH_KEY }}
-          result_format: json
-          script: cat ~/cloudflare_url.txt
+      - name: Setup SSH key for runner
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key
+          chmod 600 ~/.ssh/ec2_key
+          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
 
       - name: Export Cloudflare URL as output
         id: export_url
-        env:
-          SSH_OUTPUT: ${{ steps.get_url.outputs.output }}
         run: |
-          CF_URL=$(echo "$SSH_OUTPUT" | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['stdout'].strip())")
+          CF_URL=$(ssh -i ~/.ssh/ec2_key ec2-user@${{ secrets.EC2_HOST }} "cat ~/cloudflare_url.txt")
           echo "cloudflare_url=$CF_URL" >> $GITHUB_OUTPUT
           echo "Captured URL: $CF_URL"
 
