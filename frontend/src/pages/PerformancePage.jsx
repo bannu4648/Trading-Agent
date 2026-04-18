@@ -37,6 +37,11 @@ function moneyFmt(v) {
     }).format(v);
 }
 
+function sourceLabel(source) {
+    if (source === 'mtm_backfill') return 'Backfill (no rebalance)';
+    return source || '—';
+}
+
 export default function PerformancePage() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
@@ -488,7 +493,10 @@ export default function PerformancePage() {
                                             border: '1px solid var(--border-color)',
                                             borderRadius: 8,
                                         }}
-                                        formatter={(value) => moneyFmt(value)}
+                                        formatter={(value, name, entry) => [
+                                            moneyFmt(value),
+                                            `${name} · ${sourceLabel(entry?.payload?.source)}`,
+                                        ]}
                                     />
                                     <Area
                                         type="monotone"
@@ -523,7 +531,10 @@ export default function PerformancePage() {
                                             border: '1px solid var(--border-color)',
                                             borderRadius: 8,
                                         }}
-                                        formatter={(value) => [`${Number(value).toFixed(2)}%`, 'Cumulative']}
+                                        formatter={(value, name, entry) => [
+                                            `${Number(value).toFixed(2)}%`,
+                                            `${name} · ${sourceLabel(entry?.payload?.source)}`,
+                                        ]}
                                     />
                                     <Line
                                         type="monotone"
@@ -558,9 +569,13 @@ export default function PerformancePage() {
                                             border: '1px solid var(--border-color)',
                                             borderRadius: 8,
                                         }}
-                                        formatter={(value) =>
-                                            value == null ? '—' : [`${Number(value).toFixed(2)}%`, 'Day']
-                                        }
+                                        formatter={(value, name, entry) => {
+                                            if (value == null) return '—';
+                                            return [
+                                                `${Number(value).toFixed(2)}%`,
+                                                `${name} · ${sourceLabel(entry?.payload?.source)}`,
+                                            ];
+                                        }}
                                     />
                                     <Bar
                                         dataKey="dailyPct"
@@ -640,7 +655,14 @@ export default function PerformancePage() {
                                 </thead>
                                 <tbody>
                                     {[...rows].reverse().map((r) => (
-                                        <tr key={r.as_of_date}>
+                                        <tr
+                                            key={r.as_of_date}
+                                            style={
+                                                r.source === 'mtm_backfill'
+                                                    ? { background: 'rgba(99,115,146,0.08)' }
+                                                    : undefined
+                                            }
+                                        >
                                             <td style={{ fontFamily: 'var(--font-mono)' }}>{r.as_of_date}</td>
                                             <td>{moneyFmt(r.equity_after)}</td>
                                             <td
@@ -667,7 +689,9 @@ export default function PerformancePage() {
                                             </td>
                                             <td>{pctFmt(r.cumulative_return_pct)}</td>
                                             <td>{r.trades_count}</td>
-                                            <td style={{ fontSize: '0.8rem' }}>{r.source}</td>
+                                            <td style={{ fontSize: '0.8rem' }}>
+                                                {sourceLabel(r.source)}
+                                            </td>
                                         </tr>
                                     ))}
                                 </tbody>

@@ -70,7 +70,7 @@ def _prev_equity_after(conn: sqlite3.Connection, as_of_date: str) -> Optional[fl
     return float(row[0]) if row else None
 
 
-def append_paper_daily_row(
+def upsert_paper_daily_row(
     *,
     as_of_date: str,
     equity_before: float,
@@ -134,6 +134,39 @@ def append_paper_daily_row(
         conn.close()
 
 
+def append_paper_daily_row(
+    *,
+    as_of_date: str,
+    equity_before: float,
+    equity_after: float,
+    cash_after: float,
+    n_positions: int,
+    gross_long: float,
+    gross_short: float,
+    trades_count: int,
+    source: str,
+    holdings_weights: Optional[Dict[str, float]] = None,
+) -> Dict[str, Any]:
+    """
+    Backward-compatible alias for ``upsert_paper_daily_row``.
+
+    Kept so existing callers do not need to change while new code can use the
+    upsert-oriented name for clarity.
+    """
+    return upsert_paper_daily_row(
+        as_of_date=as_of_date,
+        equity_before=equity_before,
+        equity_after=equity_after,
+        cash_after=cash_after,
+        n_positions=n_positions,
+        gross_long=gross_long,
+        gross_short=gross_short,
+        trades_count=trades_count,
+        source=source,
+        holdings_weights=holdings_weights,
+    )
+
+
 def _row_dict_from_tuple(r: tuple[Any, ...]) -> Dict[str, Any]:
     d: Dict[str, Any] = {
         "as_of_date": r[0],
@@ -178,6 +211,22 @@ def get_row_for_date(as_of_date: str) -> Optional[Dict[str, Any]]:
         row = conn.execute(
             _SELECT_ROW + " WHERE as_of_date = ?",
             (as_of_date,),
+        ).fetchone()
+        return _row_dict_from_tuple(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_latest_row() -> Optional[Dict[str, Any]]:
+    """Return the newest row by ``as_of_date``, or ``None`` when table is empty."""
+    path = get_database_path()
+    if not path.exists():
+        return None
+    conn = _connect(path)
+    try:
+        init_schema(conn)
+        row = conn.execute(
+            _SELECT_ROW + " ORDER BY as_of_date DESC LIMIT 1",
         ).fetchone()
         return _row_dict_from_tuple(row) if row else None
     finally:

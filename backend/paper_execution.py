@@ -63,6 +63,7 @@ def run_paper_rebalance_optional(
         compute_daily_metrics,
         rebalance_to_target_weights,
     )
+    from portfolio_history.backfill import backfill_missing_mtm_rows
 
     out: Dict[str, Any] = {"executed": False}
 
@@ -90,6 +91,13 @@ def run_paper_rebalance_optional(
         )
     else:
         state = PortfolioState(cash=float(initial_cash), shares={})
+
+    if record_history:
+        out["backfill"] = backfill_missing_mtm_rows(
+            trade_date=trade_date,
+            portfolio_state=state,
+            source="mtm_backfill",
+        )
 
     before_m = compute_daily_metrics(state, prices)
     rebalance = rebalance_to_target_weights(

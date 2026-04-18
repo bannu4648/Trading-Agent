@@ -17,6 +17,7 @@ from fundamentals_agent.tools import fetch_fundamentals_data
 from summarizer_agent import SummarizerAgent
 
 from portfolio_history import append_paper_daily_row
+from portfolio_history.backfill import backfill_missing_mtm_rows
 from risk_portfolio_agent import RiskPortfolioAgent, RiskPortfolioConfig
 from paper_simulator.simulator import ExecutionParams, PortfolioState, compute_daily_metrics, rebalance_to_target_weights
 from universe.sp500 import get_sp500_tickers
@@ -208,6 +209,13 @@ def run_daily_paper_trade_job(
     state_path = _resolve_path(state_file)
     state = _load_state(state_path, initial_cash=initial_cash)
 
+    _emit("backfill", "Backfilling missing paper history days…")
+    backfill_info = backfill_missing_mtm_rows(
+        trade_date=trade_date,
+        portfolio_state=state,
+        source="mtm_backfill",
+    )
+
     _emit("rebalance", "Rebalancing paper portfolio…")
     before = compute_daily_metrics(state, prices)
     rebalance = rebalance_to_target_weights(
@@ -272,12 +280,17 @@ def run_daily_paper_trade_job(
             "snapshot_path": str(snapshot_path),
             "tradable_count": len(tradable),
             "candidate_count": len(candidate_set),
+            "backfilled_days": int(backfill_info.get("backfilled_days", 0)),
+            "backfill_start": backfill_info.get("backfill_start"),
+            "backfill_end": backfill_info.get("backfill_end"),
+            "backfill_warnings": backfill_info.get("warnings", []),
         },
         "before": before,
         "after": after,
         "rebalance": rebalance,
         "targets": targets,
         "candidates": candidate_set,
+        "backfill": backfill_info,
         "history_record": hist,
         "history_error": hist_err,
     }
