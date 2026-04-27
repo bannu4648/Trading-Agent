@@ -7,6 +7,8 @@ import {
     startSp500Screened,
     getJobStatus,
     consumeJobStream,
+    listResults,
+    getResult,
     JOB_STATUS_FIRST_POLL_MS,
     JOB_STATUS_POLL_INTERVAL_MS,
 } from '../api';
@@ -23,7 +25,7 @@ const PIPELINE_MODES = {
         shortLabel: 'Custom',
         icon: '✏️',
         description:
-            'Your symbols only: full stack with ReAct trader (four sizing methods). Best for a small watchlist.',
+            'Run analysis on your own tickers and review the recommendation in detail. Best for focused research.',
     },
     top20: {
         id: 'top20',
@@ -31,7 +33,7 @@ const PIPELINE_MODES = {
         shortLabel: 'Top 20',
         icon: '⚖️',
         description:
-            'Fixed 20 large-cap names: research all → risk allocator (default 10 long + 10 short slots) → trader on the book → validation.',
+            'Use a fixed large-cap universe and build a balanced long/short book with risk checks.',
     },
     sp500: {
         id: 'sp500',
@@ -39,46 +41,57 @@ const PIPELINE_MODES = {
         shortLabel: 'S&P 500',
         icon: '📈',
         description:
-            'Technicals on ~500 names (formula screen) → deep research on your max-candidate pool → allocator books at most k_long + k_short names with non-zero weights (defaults 10+10). Long-running.',
+            'Screen the S&P 500, shortlist candidates, and run deep analysis before allocation and validation.',
     },
 };
 
-function attachStream(jobId, setStreamBlocks, setStageLines, setStreamError, streamAbortRef) {
-    const ac = new AbortController();
-    streamAbortRef.current = ac;
-    consumeJobStream(
-        jobId,
-        (ev) => {
-            if (!ev || typeof ev !== 'object') return;
-            if (ev.type === 'llm_chunk' && ev.chunk) {
-                const k = streamKey(ev);
-                setStreamBlocks((prev) => ({
-                    ...prev,
-                    [k]: (prev[k] || '') + ev.chunk,
-                }));
-            } else if (ev.type === 'llm_start') {
-                const k = streamKey(ev);
-                setStreamBlocks((prev) => ({
-                    ...prev,
-                    [k]: (prev[k] ? `${prev[k]}\n` : ''),
-                }));
-            } else if (ev.type === 'stage' && ev.label) {
-                const line = ev.ticker ? `${ev.label} (${ev.ticker})` : ev.label;
-                setStageLines((prev) => [...prev, line]);
-            } else if (ev.type === 'job_done') {
-                streamAbortRef.current = null;
-            }
-        },
-        ac.signal,
-        (err) => setStreamError(err.message || String(err)),
-    );
+const PIPELINE_PHASES = [
+    { key: 'technical', label: 'Technical analysis' },
+    { key: 'research', label: 'Sentiment and fundamentals' },
+    { key: 'synthesis', label: 'Synthesis' },
+    { key: 'trader', label: 'Trader sizing' },
+    { key: 'validation', label: 'Risk validation' },
+];
+
+const STEP_INDEX = {
+    init: 0,
+    technical: 0,
+    technical_wide: 0,
+    screen: 0,
+    research: 1,
+    synthesis: 2,
+    risk_portfolio: 3,
+    trader: 3,
+    validation: 4,
+    paper: 4,
+};
+
+function emptyFlowViewState() {
+    return {
+        status: 'idle',
+        statusMsg: '',
+        results: null,
+        partialResults: null,
+        failureError: null,
+        streamBlocks: {},
+        stageLines: [],
+        streamError: null,
+        activeJobId: null,
+        latestJobId: null,
+        mainTab: 'live',
+        stockTab: '',
+        rawEvents: [],
+    };
 }
 
 export default function AnalysisPage() {
     const { session, mergeSession, clearSession } = useAnalysisSession();
     const [searchParams, setSearchParams] = useSearchParams();
+    const modeParam = searchParams.get('mode');
+    const quickRunParam = searchParams.get('quickrun');
+    const quickRunView = quickRunParam === '1';
     const [pipelineMode, setPipelineMode] = useState(() => {
-        const m = searchParams.get('mode');
+        const m = modeParam;
         return m === 'top20' || m === 'sp500' ? m : 'custom';
     });
 
@@ -104,26 +117,118 @@ export default function AnalysisPage() {
     const [streamError, setStreamError] = useState(null);
     const [activeJobId, setActiveJobId] = useState(null);
     const [latestJobId, setLatestJobId] = useState(null);
+    const [developerMode, setDeveloperMode] = useState(false);
+    const [optionalOpen, setOptionalOpen] = useState(false);
+    const [rawEvents, setRawEvents] = useState([]);
+    const [latestSavedPortfolio, setLatestSavedPortfolio] = useState(null);
 
     const pollRef = useRef(null);
     const streamAbortRef = useRef(null);
     const hydratedFromSessionRef = useRef(false);
+    const quickRunTriggeredRef = useRef(false);
+    const flowViewsRef = useRef({
+        custom: emptyFlowViewState(),
+        top20: emptyFlowViewState(),
+        sp500: emptyFlowViewState(),
+    });
+    const prevModeRef = useRef(pipelineMode);
     const pipelineModeRef = useRef(pipelineMode);
     pipelineModeRef.current = pipelineMode;
 
+    const applyFlowView = useCallback((view) => {
+        setStatus(view.status);
+        setStatusMsg(view.statusMsg);
+        setResults(view.results);
+        setPartialResults(view.partialResults);
+        setFailureError(view.failureError);
+        setStreamBlocks(view.streamBlocks);
+        setStageLines(view.stageLines);
+        setStreamError(view.streamError);
+        setActiveJobId(view.activeJobId);
+        setLatestJobId(view.latestJobId);
+        setMainTab(view.mainTab);
+        setStockTab(view.stockTab);
+        setRawEvents(view.rawEvents);
+    }, []);
+
+    const snapshotFlowView = useCallback(() => ({
+        status,
+        statusMsg,
+        results,
+        partialResults,
+        failureError,
+        streamBlocks,
+        stageLines,
+        streamError,
+        activeJobId,
+        latestJobId,
+        mainTab,
+        stockTab,
+        rawEvents,
+    }), [
+        status,
+        statusMsg,
+        results,
+        partialResults,
+        failureError,
+        streamBlocks,
+        stageLines,
+        streamError,
+        activeJobId,
+        latestJobId,
+        mainTab,
+        stockTab,
+        rawEvents,
+    ]);
+
+    const switchPipelineMode = useCallback((nextMode) => {
+        if (!nextMode || nextMode === pipelineMode) return;
+        flowViewsRef.current[pipelineMode] = snapshotFlowView();
+        const nextView = flowViewsRef.current[nextMode] || emptyFlowViewState();
+        applyFlowView(nextView);
+        setPipelineMode(nextMode);
+        prevModeRef.current = nextMode;
+    }, [pipelineMode, snapshotFlowView, applyFlowView]);
+
     useLayoutEffect(() => {
-        if (hydratedFromSessionRef.current || !session) return;
+        if (hydratedFromSessionRef.current) return;
+        hydratedFromSessionRef.current = true;
+        const routeMode = modeParam;
+        const isRouteModeValid = routeMode === 'custom' || routeMode === 'top20' || routeMode === 'sp500';
+        if (!session) return;
         const hasPayload =
             session.results != null ||
             session.partialResults != null ||
-            (session.status && session.status !== 'idle');
+            (session.status && session.status !== 'idle') ||
+            (session.flowViews &&
+                ['custom', 'top20', 'sp500'].some((mode) => {
+                    const view = session.flowViews?.[mode];
+                    return Boolean(
+                        view &&
+                            (view.results != null ||
+                                view.partialResults != null ||
+                                (view.status && view.status !== 'idle')),
+                    );
+                }));
         if (!hasPayload) return;
-        hydratedFromSessionRef.current = true;
 
-        if (session.pipelineMode === 'top20' || session.pipelineMode === 'sp500') {
-            setSearchParams({ mode: session.pipelineMode });
+        const baseFlowViews = {
+            custom: emptyFlowViewState(),
+            top20: emptyFlowViewState(),
+            sp500: emptyFlowViewState(),
+        };
+        const sessionFlowViews = session.flowViews && typeof session.flowViews === 'object'
+            ? session.flowViews
+            : {};
+        flowViewsRef.current = { ...baseFlowViews, ...sessionFlowViews };
+
+        if (isRouteModeValid) {
+            setPipelineMode(routeMode);
+            prevModeRef.current = routeMode;
+        } else if (session.pipelineMode) {
+            setPipelineMode(session.pipelineMode);
+            prevModeRef.current = session.pipelineMode;
         }
-        if (session.pipelineMode) setPipelineMode(session.pipelineMode);
         if (session.tickerInput != null) setTickerInput(session.tickerInput);
         if (session.endDate != null) setEndDate(session.endDate);
         if (session.useLlmInterpret != null) setUseLlmInterpret(session.useLlmInterpret);
@@ -136,9 +241,25 @@ export default function AnalysisPage() {
         if (session.paperForce != null) setPaperForce(session.paperForce);
         if (session.mainTab != null) setMainTab(session.mainTab);
         if (session.stockTab != null) setStockTab(session.stockTab);
+        if (session.developerMode != null) setDeveloperMode(Boolean(session.developerMode));
         if (session.streamBlocks != null) setStreamBlocks(session.streamBlocks);
         if (session.stageLines != null) setStageLines(session.stageLines);
+        if (session.rawEvents != null) setRawEvents(session.rawEvents);
         if (session.streamError != null) setStreamError(session.streamError);
+
+        const targetMode = isRouteModeValid
+            ? routeMode
+            : session.pipelineMode === 'custom' || session.pipelineMode === 'top20' || session.pipelineMode === 'sp500'
+              ? session.pipelineMode
+              : 'custom';
+        const flowView = flowViewsRef.current[targetMode];
+        if (flowView) {
+            applyFlowView({
+                ...emptyFlowViewState(),
+                ...flowView,
+            });
+            return;
+        }
 
         const resumeJobId = session.activeJobId || session.latestJobId || null;
         if (session.status === 'running' && resumeJobId) {
@@ -174,16 +295,39 @@ export default function AnalysisPage() {
             setActiveJobId(null);
             setLatestJobId(session.latestJobId ?? null);
         }
-    }, [session, setSearchParams]);
+    }, [session, modeParam, applyFlowView]);
 
     useEffect(() => {
-        const m = searchParams.get('mode');
-        if ((m === 'top20' || m === 'sp500') && m !== pipelineMode && status === 'idle') {
-            setPipelineMode(m);
+        const m = modeParam;
+        if ((m === 'custom' || m === 'top20' || m === 'sp500') && m !== pipelineMode) {
+            switchPipelineMode(m);
         }
-    }, [searchParams, pipelineMode, status]);
+    }, [modeParam, pipelineMode, switchPipelineMode]);
 
     useEffect(() => {
+        if (prevModeRef.current !== pipelineMode) {
+            flowViewsRef.current[prevModeRef.current] = snapshotFlowView();
+            const nextView = flowViewsRef.current[pipelineMode] || emptyFlowViewState();
+            applyFlowView(nextView);
+            prevModeRef.current = pipelineMode;
+        }
+    }, [pipelineMode, snapshotFlowView, applyFlowView]);
+
+    useEffect(() => {
+        // Developer route defaults for manual S&P500 run (no quickrun):
+        // keep these aligned with landing-page quick run defaults.
+        if (modeParam !== 'sp500' || quickRunParam === '1') return;
+        setUseLlmInterpret(true);
+        setEnableLlmSummaryTechnical(false);
+        setExecutePaper(true);
+        setPaperForce(true);
+        setMaxCandidates(30);
+        setLimitUniverse(0);
+    }, [modeParam, quickRunParam]);
+
+    useEffect(() => {
+        const currentFlowSnapshot = snapshotFlowView();
+        flowViewsRef.current[pipelineMode] = currentFlowSnapshot;
         mergeSession({
             pipelineMode,
             tickerInput,
@@ -196,6 +340,7 @@ export default function AnalysisPage() {
             paperForce,
             mainTab,
             stockTab,
+            developerMode,
             status,
             statusMsg,
             results,
@@ -203,9 +348,14 @@ export default function AnalysisPage() {
             failureError,
             streamBlocks,
             stageLines,
+            rawEvents,
             streamError,
             activeJobId,
             latestJobId,
+            flowViews: {
+                ...flowViewsRef.current,
+                [pipelineMode]: currentFlowSnapshot,
+            },
         });
     }, [
         mergeSession,
@@ -220,6 +370,7 @@ export default function AnalysisPage() {
         paperForce,
         mainTab,
         stockTab,
+        developerMode,
         status,
         statusMsg,
         results,
@@ -227,9 +378,11 @@ export default function AnalysisPage() {
         failureError,
         streamBlocks,
         stageLines,
+        rawEvents,
         streamError,
         activeJobId,
         latestJobId,
+        snapshotFlowView,
     ]);
 
     useEffect(
@@ -243,11 +396,10 @@ export default function AnalysisPage() {
     const selectMode = useCallback(
         (mode) => {
             if (status === 'running') return;
-            setPipelineMode(mode);
-            if (mode === 'custom') setSearchParams({});
-            else setSearchParams({ mode });
+            switchPipelineMode(mode);
+            setSearchParams({ mode });
         },
-        [status, setSearchParams],
+        [status, setSearchParams, switchPipelineMode],
     );
 
     const isBookStyle = pipelineMode === 'top20' || pipelineMode === 'sp500';
@@ -265,17 +417,29 @@ export default function AnalysisPage() {
         if (!pr?.metadata) return 'Pipeline running… next status check in ~10s.';
         const m = pr.metadata;
         const label = m.pipeline_step_label || 'Running…';
+        const step = m.pipeline_step || '';
         const rd = m.research_done;
         const rt = m.research_total;
         const researchExtra =
             rd != null && rt != null ? ` (${rd}/${rt} tickers)` : '';
         if (mode === 'sp500' && m.pipeline_step) {
-            return `${label} [${m.pipeline_step}]${researchExtra} — next poll ~10s.`;
+            const statusByStep = {
+                screen: 'Screening the S&P500 universe and ranking candidates.',
+                technical_wide: 'Running wide technical pass to build the shortlist.',
+                technical: 'Running technical analysis on shortlisted names.',
+                research: `Collecting sentiment and fundamentals${researchExtra}.`,
+                synthesis: 'Synthesizing ticker research into strategy-ready summaries.',
+                risk_portfolio: 'Sizing the allocator book and preparing target weights.',
+                trader: 'Preparing trader sizing and final execution outputs.',
+                validation: 'Running portfolio risk checks and compliance guards.',
+                paper: 'Writing paper portfolio state and finishing the run.',
+            };
+            return `${statusByStep[step] || `${label} [${step}]`} Next update in ~10s.`;
         }
         return `${label}${researchExtra} — next poll ~10s.`;
     }, []);
 
-    const handleRun = useCallback(async () => {
+    const handleRun = useCallback(async (overrides = {}) => {
         if (pollRef.current) {
             clearTimeout(pollRef.current);
             pollRef.current = null;
@@ -285,8 +449,19 @@ export default function AnalysisPage() {
             streamAbortRef.current = null;
         }
 
-        if (pipelineMode === 'custom') {
-            const tickers = tickerInput
+        const effectiveMode = overrides.mode || pipelineMode;
+        const effectiveTickerInput = overrides.tickerInput ?? tickerInput;
+        const effectiveEndDate = overrides.endDate ?? endDate;
+        const effectiveUseLlmInterpret = overrides.useLlmInterpret ?? useLlmInterpret;
+        const effectiveEnableLlmSummaryTechnical =
+            overrides.enableLlmSummaryTechnical ?? enableLlmSummaryTechnical;
+        const effectiveMaxCandidates = overrides.maxCandidates ?? maxCandidates;
+        const effectiveLimitUniverse = overrides.limitUniverse ?? limitUniverse;
+        const effectiveExecutePaper = overrides.executePaper ?? executePaper;
+        const effectivePaperForce = overrides.paperForce ?? paperForce;
+
+        if (effectiveMode === 'custom') {
+            const tickers = effectiveTickerInput
                 .split(',')
                 .map((t) => t.trim().toUpperCase())
                 .filter(Boolean);
@@ -302,39 +477,40 @@ export default function AnalysisPage() {
         setFailureError(null);
         setStreamBlocks({});
         setStageLines([]);
+        setRawEvents([]);
         setStreamError(null);
         setMainTab('live');
         setActiveJobId(null);
         setLatestJobId(null);
 
-        const modeMeta = PIPELINE_MODES[pipelineMode];
+        const modeMeta = PIPELINE_MODES[effectiveMode];
         setStatusMsg(`Starting ${modeMeta.label}…`);
 
         try {
             let job_id;
 
-            if (pipelineMode === 'custom') {
-                const tickers = tickerInput
+            if (effectiveMode === 'custom') {
+                const tickers = effectiveTickerInput
                     .split(',')
                     .map((t) => t.trim().toUpperCase())
                     .filter(Boolean);
                 ({ job_id } = await startAnalysis(tickers));
-            } else if (pipelineMode === 'top20') {
+            } else if (effectiveMode === 'top20') {
                 ({ job_id } = await startTop20LongShort({
-                    endDate: endDate.trim() || null,
-                    useLlmInterpret: useLlmInterpret,
-                    executePaper,
-                    paperForce,
+                    endDate: effectiveEndDate.trim() || null,
+                    useLlmInterpret: effectiveUseLlmInterpret,
+                    executePaper: effectiveExecutePaper,
+                    paperForce: effectivePaperForce,
                 }));
             } else {
                 ({ job_id } = await startSp500Screened({
-                    endDate: endDate.trim() || null,
-                    useLlmInterpret: useLlmInterpret,
-                    enableLlmSummaryTechnical,
-                    maxCandidates: maxCandidates || 30,
-                    limitUniverse: limitUniverse || 0,
-                    executePaper,
-                    paperForce,
+                    endDate: effectiveEndDate.trim() || null,
+                    useLlmInterpret: effectiveUseLlmInterpret,
+                    enableLlmSummaryTechnical: effectiveEnableLlmSummaryTechnical,
+                    maxCandidates: effectiveMaxCandidates || 30,
+                    limitUniverse: effectiveLimitUniverse || 0,
+                    executePaper: effectiveExecutePaper,
+                    paperForce: effectivePaperForce,
                 }));
             }
 
@@ -359,9 +535,90 @@ export default function AnalysisPage() {
     ]);
 
     useEffect(() => {
+        const quickRun = quickRunParam;
+        const mode = modeParam;
+        if (quickRun !== '1' || mode !== 'sp500' || quickRunTriggeredRef.current) return;
+        if (status !== 'idle') return;
+        quickRunTriggeredRef.current = true;
+
+        // Quick launcher defaults
+        setPipelineMode('sp500');
+        setMaxCandidates(30);
+        setUseLlmInterpret(true);
+        setExecutePaper(true);
+        setPaperForce(true);
+        setStatusMsg('Starting quick S&P500 screened run...');
+
+        handleRun({
+            mode: 'sp500',
+            maxCandidates: 30,
+            useLlmInterpret: true,
+            executePaper: true,
+            paperForce: true,
+        });
+    }, [quickRunParam, modeParam, status, handleRun]);
+
+    useEffect(() => {
+        (async () => {
+            try {
+                const entries = await listResults();
+                const candidates = (entries || [])
+                    .filter((entry) => /^(sp500_screened_|top20_longshort_)/.test(entry.filename))
+                    .sort((a, b) => String(b.generated_at || '').localeCompare(String(a.generated_at || '')));
+                if (candidates.length === 0) {
+                    setLatestSavedPortfolio(null);
+                    return;
+                }
+                const latest = await getResult(candidates[0].filename);
+                const weights = latest?.target_weights || {};
+                if (Object.keys(weights).length === 0) {
+                    setLatestSavedPortfolio(null);
+                    return;
+                }
+                setLatestSavedPortfolio({
+                    filename: candidates[0].filename,
+                    generated_at: candidates[0].generated_at,
+                    target_weights: weights,
+                });
+            } catch {
+                setLatestSavedPortfolio(null);
+            }
+        })();
+    }, []);
+
+    useEffect(() => {
         if (status !== 'running' || !activeJobId) return;
 
-        attachStream(activeJobId, setStreamBlocks, setStageLines, setStreamError, streamAbortRef);
+        const streamEventHandler = (ev) => {
+            if (!ev || typeof ev !== 'object') return;
+            setRawEvents((prev) => [...prev, ev].slice(-200));
+            if (ev.type === 'llm_chunk' && ev.chunk) {
+                const k = streamKey(ev);
+                setStreamBlocks((prev) => ({
+                    ...prev,
+                    [k]: (prev[k] || '') + ev.chunk,
+                }));
+            } else if (ev.type === 'llm_start') {
+                const k = streamKey(ev);
+                setStreamBlocks((prev) => ({
+                    ...prev,
+                    [k]: (prev[k] ? `${prev[k]}\n` : ''),
+                }));
+            } else if (ev.type === 'stage' && ev.label) {
+                const line = ev.ticker ? `${ev.label} (${ev.ticker})` : ev.label;
+                setStageLines((prev) => [...prev, line]);
+            } else if (ev.type === 'job_done') {
+                streamAbortRef.current = null;
+            }
+        };
+        const ac = new AbortController();
+        streamAbortRef.current = ac;
+        consumeJobStream(
+            activeJobId,
+            streamEventHandler,
+            ac.signal,
+            (err) => setStreamError(err.message || String(err)),
+        );
 
         const modeMeta = PIPELINE_MODES[pipelineModeRef.current];
 
@@ -426,6 +683,36 @@ export default function AnalysisPage() {
     const showLiveDashboard = status === 'running' && partialResults && !isBookStyle;
     const showFailedPartial = status === 'failed' && partialResults && !isBookStyle;
     const streamActive = status === 'running';
+    const currentStepKey = displayData?.metadata?.pipeline_step || null;
+    const currentStepIndex = STEP_INDEX[currentStepKey] ?? -1;
+    const phaseDetails = PIPELINE_PHASES.map((phase, index) => {
+        let state = 'pending';
+        if (status === 'completed' || index < currentStepIndex) state = 'done';
+        else if (index === currentStepIndex && status === 'running') state = 'running';
+        return { ...phase, state };
+    });
+    const runningPhase = phaseDetails.find((phase) => phase.state === 'running') || null;
+    const doneCount = phaseDetails.filter((phase) => phase.state === 'done').length;
+    const progressPercent =
+        status === 'completed'
+            ? 100
+            : Math.round(
+                  ((doneCount + (runningPhase ? 0.5 : 0)) / Math.max(PIPELINE_PHASES.length, 1)) * 100,
+              );
+    const currentStageText =
+        status === 'running'
+            ? runningPhase
+                ? `${runningPhase.label} in progress`
+                : displayData?.metadata?.pipeline_step_label || 'Pipeline running...'
+            : displayData?.metadata?.pipeline_step_label || '';
+    const canClearStream = Object.keys(streamBlocks).length > 0 || stageLines.length > 0 || rawEvents.length > 0;
+
+    const clearLlmOnly = useCallback(() => {
+        setStreamBlocks({});
+        setStageLines([]);
+        setRawEvents([]);
+        setStreamError(null);
+    }, []);
 
     const tw = displayData?.target_weights || {};
     const weightRows = Object.entries(tw)
@@ -486,9 +773,7 @@ export default function AnalysisPage() {
                     <div style={{ flex: '1 1 280px' }}>
                         <h2>Run pipeline</h2>
                         <p style={{ marginBottom: 0 }}>
-                            Choose how the backend selects tickers: <strong>custom list</strong>,{' '}
-                            <strong>Top 20</strong> curated book, or <strong>S&amp;P 500 screened</strong> at scale.
-                            See <code>docs/PIPELINE.md</code> for stages and methodologies.
+                            Choose a flow and run it. Use the optional settings only when you need finer control.
                         </p>
                     </div>
                     {hasCachedRun && (
@@ -505,13 +790,14 @@ export default function AnalysisPage() {
                                     lineHeight: 1.35,
                                 }}
                             >
-                                Results stay while you use other tabs; full page reload clears them.
+                                Clears the current run view.
                             </p>
                         </div>
                     )}
                 </div>
             </div>
 
+            {!quickRunView && (
             <div className="card" style={{ marginBottom: 'var(--sp-xl)' }}>
                 <p
                     style={{
@@ -522,32 +808,12 @@ export default function AnalysisPage() {
                 >
                     Pipeline mode
                 </p>
-                <div className="pipeline-mode-selector">
-                    {Object.values(PIPELINE_MODES).map((m) => (
-                        <button
-                            key={m.id}
-                            type="button"
-                            className={`pipeline-mode-btn ${pipelineMode === m.id ? 'active' : ''}`}
-                            onClick={() => selectMode(m.id)}
-                            disabled={runDisabled}
-                        >
-                            <span className="pipeline-mode-btn-icon">{m.icon}</span>
-                            <span className="pipeline-mode-btn-title">{m.label}</span>
-                            <span className="pipeline-mode-btn-desc">{m.description}</span>
-                        </button>
-                    ))}
+                <div className="pipeline-mode-section active">
+                    <p className="pipeline-mode-section-title">
+                        <span className="pipeline-mode-btn-icon">{modeInfo.icon}</span> {modeInfo.label}
+                    </p>
+                    <p className="pipeline-mode-section-desc">{modeInfo.description}</p>
                 </div>
-
-                <p
-                    style={{
-                        marginTop: 'var(--sp-lg)',
-                        fontSize: '0.85rem',
-                        color: 'var(--text-secondary)',
-                        lineHeight: 1.5,
-                    }}
-                >
-                    <strong>{modeInfo.label}:</strong> {modeInfo.description}
-                </p>
 
                 <div style={{ marginTop: 'var(--sp-lg)' }}>
                     {pipelineMode === 'custom' && (
@@ -578,16 +844,11 @@ export default function AnalysisPage() {
                         </div>
                     )}
 
-                    {(pipelineMode === 'top20' || pipelineMode === 'sp500') && (
+                    {pipelineMode === 'top20' && (
                         <div
-                            className="analysis-form"
-                            style={{
-                                flexWrap: 'wrap',
-                                alignItems: 'flex-end',
-                                gap: 'var(--sp-md)',
-                            }}
+                            className="analysis-form book-form"
                         >
-                            <div className="input-group" style={{ minWidth: '200px' }}>
+                            <div className="input-group" style={{ minWidth: '220px' }}>
                                 <label htmlFor="pipe-end">End date (optional)</label>
                                 <input
                                     id="pipe-end"
@@ -599,15 +860,7 @@ export default function AnalysisPage() {
                                     disabled={runDisabled}
                                 />
                             </div>
-                            <label
-                                style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '0.5rem',
-                                    cursor: 'pointer',
-                                    fontSize: '0.88rem',
-                                }}
-                            >
+                            <label className="option-check">
                                 <input
                                     type="checkbox"
                                     checked={useLlmInterpret}
@@ -616,145 +869,154 @@ export default function AnalysisPage() {
                                 />
                                 LLM interpret (adapter)
                             </label>
-                            {pipelineMode === 'sp500' && (
-                                <>
-                                    <label
-                                        style={{
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            gap: '0.5rem',
-                                            cursor: 'pointer',
-                                            fontSize: '0.88rem',
-                                        }}
-                                    >
-                                        <input
-                                            type="checkbox"
-                                            checked={enableLlmSummaryTechnical}
-                                            onChange={(e) =>
-                                                setEnableLlmSummaryTechnical(e.target.checked)
-                                            }
-                                            disabled={runDisabled}
-                                        />
-                                        Technical LLM on ~500 (expensive)
-                                    </label>
-                                    <div className="input-group" style={{ width: '140px' }}>
-                                        <label htmlFor="max-cand">Max candidates</label>
-                                        <input
-                                            id="max-cand"
-                                            className="input-field"
-                                            type="number"
-                                            min={5}
-                                            max={200}
-                                            value={maxCandidates}
-                                            onChange={(e) =>
-                                                setMaxCandidates(Number(e.target.value) || 30)
-                                            }
-                                            disabled={runDisabled}
-                                        />
-                                        <span
-                                            style={{
-                                                display: 'block',
-                                                fontSize: '0.72rem',
-                                                color: 'var(--text-muted)',
-                                                marginTop: '0.35rem',
-                                                lineHeight: 1.35,
-                                            }}
-                                        >
-                                            Split across long/short ideas: best half by formula expected return
-                                            (from technicals) and worst half. The allocator still caps booked names
-                                            (k_long + k_short; see dashboard after the run).
-                                        </span>
-                                    </div>
-                                    <div className="input-group" style={{ width: '140px' }}>
-                                        <label htmlFor="lim-uni">Limit universe (debug)</label>
-                                        <input
-                                            id="lim-uni"
-                                            className="input-field"
-                                            type="number"
-                                            min={0}
-                                            max={503}
-                                            value={limitUniverse}
-                                            onChange={(e) =>
-                                                setLimitUniverse(Number(e.target.value) || 0)
-                                            }
-                                            disabled={runDisabled}
-                                        />
-                                        <span
-                                            style={{
-                                                display: 'block',
-                                                fontSize: '0.72rem',
-                                                color: 'var(--text-muted)',
-                                                marginTop: '0.35rem',
-                                                lineHeight: 1.35,
-                                            }}
-                                        >
-                                            Use <strong>0</strong> for the full list. Any N&gt;0 caps the pipeline to the
-                                            first N S&amp;P tickers — you will see at most N candidates after screening.
-                                        </span>
-                                    </div>
-                                </>
-                            )}
-                            <div
-                                style={{
-                                    display: 'flex',
-                                    flexWrap: 'wrap',
-                                    gap: 'var(--sp-md)',
-                                    alignItems: 'center',
-                                }}
-                            >
-                                <label
-                                    style={{
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '0.5rem',
-                                        cursor: 'pointer',
-                                        fontSize: '0.88rem',
-                                    }}
-                                >
-                                    <input
-                                        type="checkbox"
-                                        checked={executePaper}
-                                        onChange={(e) => setExecutePaper(e.target.checked)}
-                                        disabled={runDisabled}
-                                    />
-                                    Paper rebalance after validation
-                                </label>
-                                <label
-                                    style={{
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '0.5rem',
-                                        cursor: 'pointer',
-                                        fontSize: '0.88rem',
-                                        opacity: executePaper ? 1 : 0.5,
-                                    }}
-                                >
-                                    <input
-                                        type="checkbox"
-                                        checked={paperForce}
-                                        onChange={(e) => setPaperForce(e.target.checked)}
-                                        disabled={runDisabled || !executePaper}
-                                    />
-                                    Force even if risk HIGH
-                                </label>
-                            </div>
+                            <label className="option-check">
+                                <input
+                                    type="checkbox"
+                                    checked={executePaper}
+                                    onChange={(e) => setExecutePaper(e.target.checked)}
+                                    disabled={runDisabled}
+                                />
+                                Paper rebalance after validation
+                            </label>
+                            <label className="option-check" style={{ opacity: executePaper ? 1 : 0.5 }}>
+                                <input
+                                    type="checkbox"
+                                    checked={paperForce}
+                                    onChange={(e) => setPaperForce(e.target.checked)}
+                                    disabled={runDisabled || !executePaper}
+                                />
+                                Force even if risk HIGH
+                            </label>
                             <button
                                 type="button"
                                 className="btn btn-primary"
                                 onClick={handleRun}
                                 disabled={runDisabled}
                             >
-                                {runDisabled
-                                    ? 'Running…'
-                                    : pipelineMode === 'top20'
-                                      ? 'Run Top 20 long/short'
-                                      : 'Run S&P 500 screened'}
+                                {runDisabled ? 'Running…' : 'Run Top 20 long/short'}
                             </button>
+                        </div>
+                    )}
+                    {pipelineMode === 'sp500' && (
+                        <div className="analysis-form sp500-priority-form">
+                            <div className="input-group">
+                                <label htmlFor="max-cand">Max candidates</label>
+                                <input
+                                    id="max-cand"
+                                    className="input-field"
+                                    type="number"
+                                    min={5}
+                                    max={200}
+                                    value={maxCandidates}
+                                    onChange={(e) => setMaxCandidates(Number(e.target.value) || 30)}
+                                    disabled={runDisabled}
+                                />
+                            </div>
+                            <div className="sp500-check-grid">
+                                <label className="option-check">
+                                    <input
+                                        type="checkbox"
+                                        checked={useLlmInterpret}
+                                        onChange={(e) => setUseLlmInterpret(e.target.checked)}
+                                        disabled={runDisabled}
+                                    />
+                                    Use LLM interpretation (richer reasoning)
+                                </label>
+                                <label className="option-check">
+                                    <input
+                                        type="checkbox"
+                                        checked={executePaper}
+                                        onChange={(e) => setExecutePaper(e.target.checked)}
+                                        disabled={runDisabled}
+                                    />
+                                    Apply paper rebalance after validation
+                                </label>
+                                <label className="option-check" style={{ opacity: executePaper ? 1 : 0.5 }}>
+                                    <input
+                                        type="checkbox"
+                                        checked={paperForce}
+                                        onChange={(e) => setPaperForce(e.target.checked)}
+                                        disabled={runDisabled || !executePaper}
+                                    />
+                                    Run rebalance even when risk is HIGH
+                                </label>
+                            </div>
+                            <div className="sp500-run-action">
+                                <button
+                                    type="button"
+                                    className="btn btn-primary"
+                                    onClick={handleRun}
+                                    disabled={runDisabled}
+                                >
+                                    {runDisabled ? 'Running…' : 'Run S&P 500 screened'}
+                                </button>
+                            </div>
+
+                            <div className="sp500-optional-wrap">
+                                <button
+                                    type="button"
+                                    className="btn btn-secondary"
+                                    onClick={() => setOptionalOpen((v) => !v)}
+                                    disabled={runDisabled}
+                                >
+                                    {optionalOpen ? 'Hide optional settings' : 'Show optional settings'}
+                                </button>
+                                {optionalOpen && (
+                                    <div className="sp500-optional-panel">
+                                        <div className="input-group">
+                                            <label htmlFor="pipe-end">End date (optional)</label>
+                                            <input
+                                                id="pipe-end"
+                                                className="input-field"
+                                                type="text"
+                                                placeholder="YYYY-MM-DD — blank = today UTC"
+                                                value={endDate}
+                                                onChange={(e) => setEndDate(e.target.value)}
+                                                disabled={runDisabled}
+                                            />
+                                        </div>
+                                        <div className="input-group">
+                                            <label htmlFor="lim-uni">Limit universe (debug)</label>
+                                            <input
+                                                id="lim-uni"
+                                                className="input-field"
+                                                type="number"
+                                                min={0}
+                                                max={503}
+                                                value={limitUniverse}
+                                                onChange={(e) => setLimitUniverse(Number(e.target.value) || 0)}
+                                                disabled={runDisabled}
+                                            />
+                                            <span className="input-help">
+                                                Use <strong>0</strong> for full list.
+                                            </span>
+                                        </div>
+                                        <label className="option-check">
+                                            <input
+                                                type="checkbox"
+                                                checked={developerMode}
+                                                onChange={(e) => setDeveloperMode(e.target.checked)}
+                                                disabled={runDisabled}
+                                            />
+                                            Developer mode (show live raw JSON stream)
+                                        </label>
+                                        <label className="option-check">
+                                            <input
+                                                type="checkbox"
+                                                checked={enableLlmSummaryTechnical}
+                                                onChange={(e) => setEnableLlmSummaryTechnical(e.target.checked)}
+                                                disabled={runDisabled}
+                                            />
+                                            Technical LLM on ~500 (expensive)
+                                        </label>
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     )}
                 </div>
 
-                {statusMsg && (
+                {statusMsg && status !== 'running' && (
                     <p
                         style={{
                             marginTop: 'var(--sp-md)',
@@ -770,17 +1032,6 @@ export default function AnalysisPage() {
                         {statusMsg}
                     </p>
                 )}
-                {status === 'running' && (
-                    <p
-                        style={{
-                            marginTop: 'var(--sp-sm)',
-                            fontSize: '0.78rem',
-                            color: 'var(--text-muted)',
-                        }}
-                    >
-                        Live tokens stream below (SSE). Status polls every ~10s for partial JSON.
-                    </p>
-                )}
                 {streamError && (
                     <p
                         style={{
@@ -793,6 +1044,57 @@ export default function AnalysisPage() {
                     </p>
                 )}
             </div>
+            )}
+
+            {(status === 'running' || status === 'completed' || status === 'failed') && (
+                <div className="card" style={{ marginBottom: 'var(--sp-xl)' }}>
+                    <div className="card-header">
+                        <h3>Pipeline journey</h3>
+                        {currentStepKey && <span className="badge badge-info">{currentStepKey}</span>}
+                    </div>
+                    {status === 'running' && (
+                        <p
+                            style={{
+                                marginBottom: 'var(--sp-md)',
+                                fontSize: '0.85rem',
+                                color: 'var(--text-secondary)',
+                            }}
+                        >
+                            <strong>Current stage:</strong> {currentStageText}
+                        </p>
+                    )}
+                    {status === 'running' && (
+                        <div className="journey-progress-wrap" aria-label="Pipeline progress">
+                            <div className="journey-progress-track">
+                                <div
+                                    className="journey-progress-fill"
+                                    style={{ width: `${Math.max(progressPercent, 5)}%` }}
+                                />
+                            </div>
+                            <span className="journey-progress-text">{progressPercent}%</span>
+                        </div>
+                    )}
+                    {status === 'failed' && displayData?.metadata?.pipeline_step_label && (
+                        <p
+                            style={{
+                                marginBottom: 'var(--sp-md)',
+                                fontSize: '0.85rem',
+                                color: 'var(--accent-red)',
+                            }}
+                        >
+                            <strong>Last stage:</strong> {displayData.metadata.pipeline_step_label}
+                        </p>
+                    )}
+                    <div className="phase-track">
+                        {phaseDetails.map((phase, idx) => (
+                            <div key={phase.key} className={`phase-step ${phase.state}`}>
+                                <span className="phase-dot">{idx + 1}</span>
+                                <span className="phase-label">{phase.label}</span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
 
             {isBookStyle && (
                 <div className="tabs" style={{ marginBottom: 'var(--sp-lg)' }}>
@@ -804,14 +1106,22 @@ export default function AnalysisPage() {
 
             {isBookStyle && mainTab === 'live' && (
                 <>
-                    <LlmStreamPanel
-                        streamBlocks={streamBlocks}
-                        stageLines={stageLines}
-                        active={streamActive}
-                    />
+                    {developerMode && (
+                        <LlmStreamPanel
+                            streamBlocks={streamBlocks}
+                            stageLines={stageLines}
+                            active={streamActive}
+                            onClear={clearLlmOnly}
+                            canClear={canClearStream}
+                            developerMode={developerMode}
+                            rawJson={displayData}
+                            rawEvents={rawEvents}
+                        />
+                    )}
                     {status === 'running' &&
                         !partialResults &&
-                        Object.keys(streamBlocks).length === 0 && (
+                        Object.keys(streamBlocks).length === 0 &&
+                        !developerMode && (
                             <Spinner text="Waiting for first partial snapshot…" />
                         )}
                     {displayData && (
@@ -920,7 +1230,10 @@ export default function AnalysisPage() {
                             </div>
                             <div className="dashboard-section">
                                 <h3 className="section-title">Risk validation</h3>
-                                <RiskPanel riskReport={displayData.risk_report} />
+                                <RiskPanel
+                                    riskReport={displayData.risk_report}
+                                    isPartial={status === 'running'}
+                                />
                             </div>
                         </>
                     )}
@@ -936,18 +1249,43 @@ export default function AnalysisPage() {
                         <>
                             <div className="tabs" style={{ marginBottom: 'var(--sp-md)' }}>
                                 {tickers.map((t) => (
+                                    (() => {
+                                        const w = Number(displayData?.target_weights?.[t] ?? 0);
+                                        const isLong = w > 1e-6;
+                                        const isShort = w < -1e-6;
+                                        const tickerStyle =
+                                            status === 'running' && (isLong || isShort)
+                                                ? {
+                                                      border: `1px solid ${
+                                                          isLong ? 'rgba(16,185,129,0.65)' : 'rgba(239,68,68,0.65)'
+                                                      }`,
+                                                      borderRadius: '8px',
+                                                      background: isLong
+                                                          ? 'rgba(16,185,129,0.12)'
+                                                          : 'rgba(239,68,68,0.12)',
+                                                  }
+                                                : {};
+                                        return (
                                     <button
                                         key={t}
                                         type="button"
                                         className={`tab-btn ${stockTab === t ? 'active' : ''}`}
                                         onClick={() => setStockTab(t)}
+                                        style={tickerStyle}
                                     >
                                         {t}
                                     </button>
+                                        );
+                                    })()
                                 ))}
                             </div>
                             {stockTab && displayData.results[stockTab] && (
-                                <TickerCard ticker={stockTab} data={displayData.results[stockTab]} />
+                                <TickerCard
+                                    ticker={stockTab}
+                                    data={displayData.results[stockTab]}
+                                    isCustomView={false}
+                                    isPartial={status === 'running'}
+                                />
                             )}
                         </>
                     )}
@@ -956,28 +1294,45 @@ export default function AnalysisPage() {
 
             {!isBookStyle && (
                 <>
-                    <LlmStreamPanel
-                        streamBlocks={streamBlocks}
-                        stageLines={stageLines}
-                        active={streamActive}
-                    />
+                    {developerMode && (
+                        <LlmStreamPanel
+                            streamBlocks={streamBlocks}
+                            stageLines={stageLines}
+                            active={streamActive}
+                            onClear={clearLlmOnly}
+                            canClear={canClearStream}
+                            developerMode={developerMode}
+                            rawJson={displayData}
+                            rawEvents={rawEvents}
+                        />
+                    )}
                     {status === 'running' &&
                         !partialResults &&
-                        Object.keys(streamBlocks).length === 0 && (
+                        Object.keys(streamBlocks).length === 0 &&
+                        !developerMode && (
                             <Spinner text="Waiting for first pipeline snapshot…" />
                         )}
                     {showLiveDashboard && (
-                        <ResultsDashboard results={partialResults} isPartial />
+                        <ResultsDashboard
+                            results={partialResults}
+                            isPartial
+                            latestSavedPortfolio={latestSavedPortfolio}
+                        />
                     )}
                     {showFailedPartial && (
                         <ResultsDashboard
                             results={partialResults}
                             isPartial
                             errorMessage={failureError}
+                            latestSavedPortfolio={latestSavedPortfolio}
                         />
                     )}
                     {status === 'completed' && results && (
-                        <ResultsDashboard results={results} isPartial={false} />
+                        <ResultsDashboard
+                            results={results}
+                            isPartial={false}
+                            latestSavedPortfolio={latestSavedPortfolio}
+                        />
                     )}
                 </>
             )}

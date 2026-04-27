@@ -1,4 +1,22 @@
-export default function RiskPanel({ riskReport }) {
+export default function RiskPanel({ riskReport, portfolioContext = [], isPartial = false }) {
+    if (!riskReport && isPartial) {
+        return (
+            <div className="card fade-in">
+                <div className="card-header">
+                    <h3>📋 Portfolio Validation</h3>
+                    <span className="badge badge-info">Generating…</span>
+                </div>
+                <div className="placeholder-block">
+                    <div className="placeholder-line lg" />
+                    <div className="placeholder-line lg" />
+                    <div className="placeholder-line md" />
+                    <p className="placeholder-text">
+                        Risk validation metrics and warnings will appear after the validation stage completes.
+                    </p>
+                </div>
+            </div>
+        );
+    }
     if (!riskReport) return null;
 
     const level = riskReport.risk_level || 'UNKNOWN';
@@ -37,6 +55,41 @@ export default function RiskPanel({ riskReport }) {
                     <span className="stat-value">{metrics.num_positions || 0}</span>
                 </div>
             </div>
+
+            {portfolioContext.length > 0 && (
+                <div style={{ marginBottom: 'var(--sp-md)' }}>
+                    <h4 style={{ fontSize: '0.85rem', color: 'var(--accent-cyan)', marginBottom: 'var(--sp-sm)' }}>
+                        Current position context
+                    </h4>
+                    <table className="data-table">
+                        <thead>
+                            <tr>
+                                <th>Ticker</th>
+                                <th>Current</th>
+                                <th>Suggested</th>
+                                <th>Delta</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {portfolioContext.map((row) => (
+                                <tr key={row.ticker}>
+                                    <td style={{ fontWeight: 600 }}>{row.ticker}</td>
+                                    <td style={{ fontFamily: 'var(--font-mono)' }}>{(row.from * 100).toFixed(1)}%</td>
+                                    <td style={{ fontFamily: 'var(--font-mono)' }}>{(row.to * 100).toFixed(1)}%</td>
+                                    <td
+                                        style={{
+                                            fontFamily: 'var(--font-mono)',
+                                            color: row.delta >= 0 ? 'var(--accent-green)' : 'var(--accent-red)',
+                                        }}
+                                    >
+                                        {(row.delta * 100).toFixed(1)}%
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
 
             {warnings.length > 0 ? (
                 <>
