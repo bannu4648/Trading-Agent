@@ -1,19 +1,24 @@
-export default function PortfolioChart({ results, tickers }) {
+export default function PortfolioChart({ results, tickers, weightOverrides = null, actionOverrides = null }) {
     const tw = results?.target_weights || {};
 
     const allocations = [];
     let totalInvested = 0;
 
     for (const ticker of tickers) {
-        const order = results?.results?.[ticker]?.trade_order || {};
-        let weight = order.proposed_weight;
-        if (weight == null || Math.abs(Number(weight)) < 1e-8) {
-            const raw = Number(tw[ticker]);
-            weight = Number.isFinite(raw) ? raw : 0;
+        let weight = null;
+        if (weightOverrides && Object.prototype.hasOwnProperty.call(weightOverrides, ticker)) {
+            weight = Number(weightOverrides[ticker] || 0);
         } else {
-            weight = Number(weight);
+            const order = results?.results?.[ticker]?.trade_order || {};
+            weight = order.proposed_weight;
+            if (weight == null || Math.abs(Number(weight)) < 1e-8) {
+                const raw = Number(tw[ticker]);
+                weight = Number.isFinite(raw) ? raw : 0;
+            } else {
+                weight = Number(weight);
+            }
         }
-        let action = order.action || 'HOLD';
+        let action = actionOverrides?.[ticker] || (results?.results?.[ticker]?.trade_order?.action || 'HOLD');
         if (action === 'HOLD' && Math.abs(weight) >= 1e-8) {
             action = weight > 0 ? 'BUY' : 'SELL';
         }

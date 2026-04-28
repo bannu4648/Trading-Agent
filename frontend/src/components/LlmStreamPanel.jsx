@@ -10,7 +10,16 @@ function streamKey(ev) {
 /** Pixels from bottom; if user is within this, we treat them as "following" the stream. */
 const PIN_THRESHOLD_PX = 72;
 
-export default function LlmStreamPanel({ streamBlocks, stageLines, active }) {
+export default function LlmStreamPanel({
+    streamBlocks,
+    stageLines,
+    active,
+    onClear,
+    canClear,
+    developerMode = false,
+    rawJson = null,
+    rawEvents = [],
+}) {
     const scrollRef = useRef(null);
     const [stickToBottom, setStickToBottom] = useState(true);
 
@@ -52,9 +61,18 @@ export default function LlmStreamPanel({ streamBlocks, stageLines, active }) {
         <div className="card" style={{ marginBottom: 'var(--sp-xl)' }}>
             <div className="card-header">
                 <h3>⚡ Live LLM stream</h3>
-                <span className="badge badge-info">
-                    {active ? 'Streaming…' : 'Recorded'}
-                </span>
+                <div style={{ display: 'flex', gap: 'var(--sp-sm)', alignItems: 'center' }}>
+                    <span className="badge badge-info">{active ? 'Streaming…' : 'Recorded'}</span>
+                    <button
+                        type="button"
+                        className="btn btn-secondary"
+                        style={{ padding: '6px 10px', fontSize: '0.75rem' }}
+                        onClick={onClear}
+                        disabled={!canClear}
+                    >
+                        Clear stream
+                    </button>
+                </div>
             </div>
             {stageLines?.length > 0 && (
                 <ul style={{
@@ -109,6 +127,41 @@ export default function LlmStreamPanel({ streamBlocks, stageLines, active }) {
                     </div>
                 ))}
             </div>
+            {developerMode && (
+                <div style={{ marginTop: 'var(--sp-md)' }}>
+                    <div className="card-header" style={{ marginBottom: 'var(--sp-sm)' }}>
+                        <h3 style={{ fontSize: '0.85rem' }}>Developer raw JSON</h3>
+                        <span className="badge badge-info">{rawEvents?.length || 0} events</span>
+                    </div>
+                    <div className="llm-stream-scroll" style={{ maxHeight: '220px', overflowY: 'auto' }}>
+                        <pre
+                            style={{
+                                fontSize: '0.74rem',
+                                background: 'rgba(0,0,0,0.3)',
+                                borderRadius: '8px',
+                                padding: 'var(--sp-md)',
+                                marginBottom: 'var(--sp-md)',
+                                whiteSpace: 'pre-wrap',
+                                wordBreak: 'break-word',
+                            }}
+                        >
+                            {JSON.stringify(rawEvents || [], null, 2)}
+                        </pre>
+                        <pre
+                            style={{
+                                fontSize: '0.74rem',
+                                background: 'rgba(0,0,0,0.3)',
+                                borderRadius: '8px',
+                                padding: 'var(--sp-md)',
+                                whiteSpace: 'pre-wrap',
+                                wordBreak: 'break-word',
+                            }}
+                        >
+                            {JSON.stringify(rawJson || {}, null, 2)}
+                        </pre>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

@@ -26,7 +26,29 @@ const chipRowStyle = {
     lineHeight: 1.5,
 };
 
-export default function ResultsDashboard({ results, isPartial = false, errorMessage = null }) {
+function LoadingCard({ title, badge = 'Loading', message }) {
+    return (
+        <div className="card fade-in" style={{ marginBottom: 'var(--sp-lg)' }}>
+            <div className="card-header">
+                <h3>{title}</h3>
+                <span className="badge badge-info">{badge}</span>
+            </div>
+            <div className="placeholder-block">
+                <div className="placeholder-line lg" />
+                <div className="placeholder-line lg" />
+                <div className="placeholder-line md" />
+                <p className="placeholder-text">{message}</p>
+            </div>
+        </div>
+    );
+}
+
+export default function ResultsDashboard({
+    results,
+    isPartial = false,
+    errorMessage = null,
+    latestSavedPortfolio = null,
+}) {
     const tickers = results?.metadata?.tickers || Object.keys(results?.results || {});
     const trader = results?.trader || {};
     const riskReport = results?.risk_report || null;
@@ -67,9 +89,95 @@ export default function ResultsDashboard({ results, isPartial = false, errorMess
 
     const [activeTab, setActiveTab] = useState(tickers[0] || '');
 
-    let totalInvested = 0;
-    const investedTickers = bookStyleRun ? bookedTickers : tickers;
-    for (const t of investedTickers) {
+    const kCap = (md.allocator_k_long ?? 10) + (md.allocator_k_short ?? 10);
+    const showResearchCard = top20Explain || (sp500Explain && tickers.length > 0);
+    const hasLatestPortfolio =
+        latestSavedPortfolio &&
+        latestSavedPortfolio.target_weights &&
+        Object.keys(latestSavedPortfolio.target_weights).length > 0;
+    const rebalanceRows = [];
+    const currentPortfolioWeights = (latestSavedPortfolio && latestSavedPortfolio.target_weights) || {};
+    // Custom ticker mode should preserve the existing book and only adjust tickers
+    // explicitly analyzed in the current run.
+    const resultWeights = bookStyleRun ? {} : { ...currentPortfolioWeights };
+    for (const t of tickers) {
+        const order = results?.results?.[t]?.trade_order || {};
+        const action = order.action || 'HOLD';
+        const currentWeight = Number(currentPortfolioWeights[t] || 0);
+        let weight = order.proposed_weight;
+        if (weight == null || Math.abs(Number(weight)) < 1e-8) {
+            const raw = Number(tw[t]);
+            weight = Number.isFinite(raw) ? raw : 0;
+        } else {
+            weight = Number(weight);
+        }
+
+        // For custom ticker runs, HOLD should preserve existing portfolio weight.
+        // Without this, a HOLD implicitly looked like "sell down to 0", which is misleading.
+        if (!bookStyleRun && action === 'HOLD') {
+            weight = currentWeight;
+        }
+
+        if (action === 'SELL' && Math.abs(weight) < 1e-8) {
+            weight = -0.03;
+        }
+        resultWeights[t] = weight;
+    }
+    const customNoRebalance = !bookStyleRun && tickers.every((t) => {
+        const order = results?.results?.[t]?.trade_order || {};
+        const action = order.action || 'HOLD';
+        const from = Number(currentPortfolioWeights[t] || 0);
+        const to = Number(resultWeights[t] || 0);
+        const noWeightChange = Math.abs(to - from) <= 1e-6;
+        return action === 'HOLD' && noWeightChange;
+    });
+    const allTickers = Array.from(
+        new Set([...Object.keys(currentPortfolioWeights), ...Object.keys(resultWeights)]),
+    );
+    allTickers.forEach((t) => {
+        const from = Number(currentPortfolioWeights[t] || 0);
+        const to = Number(resultWeights[t] || 0);
+        const delta = to - from;
+        if (Math.abs(delta) > 1e-6) {
+            rebalanceRows.push({ ticker: t, from, to, delta });
+        }
+    });
+    if (customNoRebalance) {
+        rebalanceRows.length = 0;
+    }
+    rebalanceRows.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+    const portfolioContextRows = rebalanceRows.filter((row) => tickers.includes(row.ticker)).slice(0, 8);
+    const existingPortfolioTickers = Object.entries(currentPortfolioWeights)
+        .filter(([, w]) => Math.abs(Number(w || 0)) > 1e-6)
+        .map(([t]) => t);
+    const analyzedTickersSet = new Set(tickers);
+    const portfolioDisplayTickers = bookStyleRun
+        ? bookedTickers
+        : Array.from(new Set([...existingPortfolioTickers, ...tickers])).sort(
+              (a, b) => {
+                  const aPresent = Math.abs(Number(currentPortfolioWeights[a] || 0)) > 1e-6 ? 1 : 0;
+                  const bPresent = Math.abs(Number(currentPortfolioWeights[b] || 0)) > 1e-6 ? 1 : 0;
+                  const aAnalyzed = analyzedTickersSet.has(a) ? 1 : 0;
+                  const bAnalyzed = analyzedTickersSet.has(b) ? 1 : 0;
+                  if (aPresent !== bPresent) return bPresent - aPresent;
+                  if (aAnalyzed !== bAnalyzed) return bAnalyzed - aAnalyzed;
+                  return (
+                      Math.abs(Number(resultWeights[b] ?? currentPortfolioWeights[b] ?? 0)) -
+                      Math.abs(Number(resultWeights[a] ?? currentPortfolioWeights[a] ?? 0))
+                  );
+              },
+          );
+    const actionOverrides = {};
+    portfolioDisplayTickers.forEach((t) => {
+        const isAnalyzedNow = tickers.includes(t);
+        if (isAnalyzedNow) {
+            actionOverrides[t] = results?.results?.[t]?.trade_order?.action || 'HOLD';
+        } else {
+            actionOverrides[t] = 'HOLD';
+        }
+    });
+    const displayTotalInvested = portfolioDisplayTickers.reduce((acc, t) => {
+        if (!bookStyleRun) return acc + Number(resultWeights[t] ?? currentPortfolioWeights[t] ?? 0);
         const order = results?.results?.[t]?.trade_order || {};
         let w = order.proposed_weight;
         if (w == null || Math.abs(Number(w)) < 1e-8) {
@@ -78,16 +186,36 @@ export default function ResultsDashboard({ results, isPartial = false, errorMess
         } else {
             w = Number(w);
         }
-        totalInvested += w;
-    }
-    const cashPct = Math.max(0, 1 - totalInvested);
-
-    const kCap = (md.allocator_k_long ?? 10) + (md.allocator_k_short ?? 10);
-    const showResearchCard = top20Explain || (sp500Explain && tickers.length > 0);
+        return acc + w;
+    }, 0);
+    const displayCashPct = Math.max(0, 1 - displayTotalInvested);
+    const runRecommendationRows = tickers.map((t) => {
+        const order = results?.results?.[t]?.trade_order || {};
+        let weight = order.proposed_weight;
+        if (weight == null || Math.abs(Number(weight)) < 1e-8) {
+            const raw = Number(tw[t]);
+            weight = Number.isFinite(raw) ? raw : 0;
+        } else {
+            weight = Number(weight);
+        }
+        const action = order.action || 'HOLD';
+        return { ticker: t, action, weight };
+    });
+    const showSp500Loading = sp500Explain && isPartial;
+    const showPortfolioLoading = showSp500Loading && portfolioDisplayTickers.length === 0;
+    const showPerTickerLoading = showSp500Loading && tickers.length === 0;
+    const loadingResearchMessage =
+        stepKey === 'screen' || stepKey === 'technical_wide'
+            ? 'Scanning the S&P500 universe and preparing the candidate set.'
+            : 'Building the shortlist and preparing full research coverage.';
+    const loadingPortfolioMessage =
+        stepKey === 'risk_portfolio' || stepKey === 'trader'
+            ? 'Allocator and sizing are in progress. Portfolio weights will appear shortly.'
+            : 'Portfolio weights appear after research and synthesis are ready.';
 
     return (
         <div className="fade-in">
-            {(isPartial || errorMessage) && (
+            {errorMessage && (
                 <div
                     className="card"
                     style={{
@@ -109,22 +237,6 @@ export default function ResultsDashboard({ results, isPartial = false, errorMess
                                             {stepKey ? ` (${stepKey})` : ''}
                                         </span>
                                     </>
-                                )}
-                            </>
-                        )}
-                        {!errorMessage && isPartial && (
-                            <>
-                                <strong style={{ color: 'var(--accent-cyan)' }}>Live partial results</strong>
-                                {' — pipeline still running. '}
-                                {stepLabel ? (
-                                    <span style={{ color: 'var(--text-muted)' }}>
-                                        Current stage: {stepLabel}
-                                        {stepKey ? ` (${stepKey})` : ''}
-                                    </span>
-                                ) : (
-                                    <span style={{ color: 'var(--text-muted)' }}>
-                                        Sections fill in as each agent finishes; the UI refreshes about every 10 seconds.
-                                    </span>
                                 )}
                             </>
                         )}
@@ -273,10 +385,19 @@ export default function ResultsDashboard({ results, isPartial = false, errorMess
                             </div>
                         )
                     )}
+                    {showSp500Loading && tickers.length === 0 && (
+                        <div style={{ marginTop: 'var(--sp-md)' }}>
+                            <div className="placeholder-block">
+                                <div className="placeholder-line lg" />
+                                <div className="placeholder-line md" />
+                                <p className="placeholder-text">{loadingResearchMessage}</p>
+                            </div>
+                        </div>
+                    )}
                 </div>
             )}
 
-            {bookStyleRun && (
+            {bookStyleRun && !isPartial && (
                 <div
                     className="card"
                     style={{
@@ -292,12 +413,12 @@ export default function ResultsDashboard({ results, isPartial = false, errorMess
                         )}
                     </div>
                     <p style={{ margin: '0 0 var(--sp-md)', fontSize: '0.86rem', lineHeight: 1.55, color: 'var(--text-secondary)' }}>
-                        After research, <strong>RiskPortfolioAgent</strong> scores each recommendation (direction ×
-                        conviction × risk-adjusted expected return), takes the top <strong>k_long</strong> positive scores
-                        for longs and the most negative <strong>k_short</strong> for shorts, then sizes weights. Only
-                        those names get target weights; the trader runs on that subset. Default cap is{' '}
-                        <strong>{kCap}</strong> positions ({md.allocator_k_long ?? 10} long + {md.allocator_k_short ?? 10}{' '}
-                        short).
+                        Once research is complete, the allocator turns each ticker into a portfolio score by combining
+                        direction, conviction, and risk-adjusted return. It then keeps the strongest{' '}
+                        <strong>{md.allocator_k_long ?? 10}</strong> long ideas and the strongest{' '}
+                        <strong>{md.allocator_k_short ?? 10}</strong> short ideas, and sizes them into final target
+                        weights. Only this selected set goes into the trading book, capped at <strong>{kCap}</strong>{' '}
+                        positions in total.
                     </p>
                     {isPartial && bookedTickers.length === 0 && (
                         <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-muted)' }}>
@@ -335,7 +456,7 @@ export default function ResultsDashboard({ results, isPartial = false, errorMess
                             {trader.sizing_method_chosen && (
                                 <span className="badge badge-info">Method: {trader.sizing_method_chosen}</span>
                             )}
-                            <span className="badge badge-info">Invested: {(totalInvested * 100).toFixed(1)}%</span>
+                            <span className="badge badge-info">Invested: {(displayTotalInvested * 100).toFixed(1)}%</span>
                             <span
                                 className="badge"
                                 style={{
@@ -344,7 +465,7 @@ export default function ResultsDashboard({ results, isPartial = false, errorMess
                                     border: '1px solid rgba(107,114,128,0.25)',
                                 }}
                             >
-                                Cash: {(cashPct * 100).toFixed(1)}%
+                                Cash: {(displayCashPct * 100).toFixed(1)}%
                             </span>
                         </div>
                     </div>
@@ -362,10 +483,68 @@ export default function ResultsDashboard({ results, isPartial = false, errorMess
                             book.
                         </p>
                     ) : null}
+                    {!bookStyleRun && runRecommendationRows.length > 0 && (
+                        <div
+                            style={{
+                                marginBottom: 'var(--sp-md)',
+                                padding: 'var(--sp-md)',
+                                borderRadius: '8px',
+                                border: '1px solid rgba(59,130,246,0.25)',
+                                background: 'rgba(59,130,246,0.08)',
+                            }}
+                        >
+                            <p
+                                style={{
+                                    margin: '0 0 var(--sp-xs)',
+                                    fontSize: '0.78rem',
+                                    color: 'var(--text-secondary)',
+                                }}
+                            >
+                                Current run recommendation
+                            </p>
+                            <table className="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Ticker</th>
+                                        <th>Action</th>
+                                        <th>Weight</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {runRecommendationRows.map((row) => (
+                                        <tr key={row.ticker}>
+                                            <td style={{ fontWeight: 600, fontFamily: 'var(--font-mono)' }}>
+                                                {row.ticker}
+                                            </td>
+                                            <td>
+                                                <SignalBadge signal={row.action} />
+                                            </td>
+                                            <td style={{ fontFamily: 'var(--font-mono)' }}>
+                                                {(Number(row.weight) * 100).toFixed(1)}%
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
 
+                    {showPortfolioLoading ? (
+                        <div className="placeholder-block">
+                            <div className="placeholder-line lg" />
+                            <div className="placeholder-line lg" />
+                            <div className="placeholder-line md" />
+                            <p className="placeholder-text">{loadingPortfolioMessage}</p>
+                        </div>
+                    ) : (
                     <div className="grid-2">
-                        {bookedTickers.length > 0 ? (
-                            <PortfolioChart results={results} tickers={bookedTickers} />
+                        {portfolioDisplayTickers.length > 0 ? (
+                            <PortfolioChart
+                                results={results}
+                                tickers={portfolioDisplayTickers}
+                                weightOverrides={!bookStyleRun ? resultWeights : null}
+                                actionOverrides={!bookStyleRun ? actionOverrides : null}
+                            />
                         ) : (
                             <div
                                 style={{
@@ -387,41 +566,52 @@ export default function ResultsDashboard({ results, isPartial = false, errorMess
                                         <th>Ticker</th>
                                         <th>Action</th>
                                         <th>Weight</th>
-                                        <th>Method</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {bookedTickers.length === 0 ? (
+                                    {portfolioDisplayTickers.length === 0 ? (
                                         <tr>
-                                            <td colSpan={4} style={{ color: 'var(--text-muted)' }}>
+                                            <td colSpan={3} style={{ color: 'var(--text-muted)' }}>
                                                 {bookStyleRun ? 'No booked positions yet.' : 'No tickers in this result.'}
                                             </td>
                                         </tr>
                                     ) : (
-                                        bookedTickers.map((t) => {
+                                        portfolioDisplayTickers.map((t) => {
                                             const order = results?.results?.[t]?.trade_order || {};
-                                            let dispW = order.proposed_weight;
-                                            if (dispW == null || Math.abs(Number(dispW)) < 1e-8) {
-                                                const raw = Number(tw[t]);
-                                                dispW = Number.isFinite(raw) ? raw : 0;
-                                            } else {
-                                                dispW = Number(dispW);
-                                            }
-                                            let act = order.action || 'HOLD';
+                                            const isAnalyzedNow = tickers.includes(t);
+                                            let dispW = isAnalyzedNow
+                                                ? Number(resultWeights[t] ?? 0)
+                                                : Number(currentPortfolioWeights[t] ?? 0);
+                                            let act = isAnalyzedNow ? (order.action || 'HOLD') : 'HOLD';
                                             if (act === 'HOLD' && Math.abs(dispW) >= 1e-8) {
                                                 act = dispW > 0 ? 'BUY' : 'SELL';
                                             }
+                                            const isPresentAlready =
+                                                Math.abs(Number(currentPortfolioWeights[t] || 0)) > 1e-6;
+                                            const showPresentAlreadyTag = isPresentAlready && isAnalyzedNow;
                                             return (
                                                 <tr key={t}>
-                                                    <td style={{ fontWeight: 600 }}>{t}</td>
+                                                    <td style={{ fontWeight: 600 }}>
+                                                        {t}{' '}
+                                                        {showPresentAlreadyTag && (
+                                                            <span
+                                                                className="badge"
+                                                                style={{
+                                                                    marginLeft: '0.35rem',
+                                                                    background: 'rgba(59,130,246,0.12)',
+                                                                    color: 'var(--accent-blue)',
+                                                                    border: '1px solid rgba(59,130,246,0.25)',
+                                                                }}
+                                                            >
+                                                                Present Already
+                                                            </span>
+                                                        )}
+                                                    </td>
                                                     <td>
                                                         <SignalBadge signal={act} />
                                                     </td>
                                                     <td style={{ fontFamily: 'var(--font-mono)' }}>
                                                         {(dispW * 100).toFixed(1)}%
-                                                    </td>
-                                                    <td style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>
-                                                        {order.sizing_method_used || 'N/A'}
                                                     </td>
                                                 </tr>
                                             );
@@ -443,6 +633,57 @@ export default function ResultsDashboard({ results, isPartial = false, errorMess
                             )}
                         </div>
                     </div>
+                    )}
+                    {!bookStyleRun && hasLatestPortfolio && (
+                        <div style={{ marginTop: 'var(--sp-lg)' }}>
+                            <div className="card-header">
+                                <h3>Rebalance suggestion vs latest saved portfolio</h3>
+                                <span className="badge badge-info">
+                                    base: {latestSavedPortfolio.filename}
+                                </span>
+                            </div>
+                            {rebalanceRows.length === 0 ? (
+                                <p style={{ color: 'var(--text-muted)', fontSize: '0.84rem' }}>
+                                    No rebalance needed from latest saved portfolio.
+                                </p>
+                            ) : (
+                                <table className="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Ticker</th>
+                                            <th>Current</th>
+                                            <th>Suggested</th>
+                                            <th>Delta</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {rebalanceRows.slice(0, 10).map((row) => (
+                                            <tr key={row.ticker}>
+                                                <td style={{ fontWeight: 600 }}>{row.ticker}</td>
+                                                <td style={{ fontFamily: 'var(--font-mono)' }}>
+                                                    {(row.from * 100).toFixed(1)}%
+                                                </td>
+                                                <td style={{ fontFamily: 'var(--font-mono)' }}>
+                                                    {(row.to * 100).toFixed(1)}%
+                                                </td>
+                                                <td
+                                                    style={{
+                                                        fontFamily: 'var(--font-mono)',
+                                                        color:
+                                                            row.delta >= 0
+                                                                ? 'var(--accent-green)'
+                                                                : 'var(--accent-red)',
+                                                    }}
+                                                >
+                                                    {(row.delta * 100).toFixed(1)}%
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            )}
+                        </div>
+                    )}
                 </div>
             </div>
 
@@ -451,26 +692,45 @@ export default function ResultsDashboard({ results, isPartial = false, errorMess
                 <h3 className="section-title">
                     {bookStyleRun ? '🔍 Per-ticker details (full research set)' : '🔍 Per-ticker details'}
                 </h3>
-                <div className="tabs">
-                    {tickers.map((t) => (
-                        <button
-                            key={t}
-                            className={`tab-btn ${t === activeTab ? 'active' : ''}`}
-                            onClick={() => setActiveTab(t)}
-                        >
-                            {t}
-                        </button>
-                    ))}
-                </div>
-                {activeTab && results?.results?.[activeTab] && (
-                    <TickerCard ticker={activeTab} data={results.results[activeTab]} />
+                {showPerTickerLoading ? (
+                    <LoadingCard
+                        title="🔍 Per-ticker details"
+                        badge="Queued"
+                        message="Ticker-level cards will appear as each research packet is completed."
+                    />
+                ) : (
+                    <>
+                        <div className="tabs">
+                            {tickers.map((t) => (
+                                <button
+                                    key={t}
+                                    className={`tab-btn ${t === activeTab ? 'active' : ''}`}
+                                    onClick={() => setActiveTab(t)}
+                                >
+                                    {t}
+                                </button>
+                            ))}
+                        </div>
+                        {activeTab && results?.results?.[activeTab] && (
+                            <TickerCard
+                                ticker={activeTab}
+                                data={results.results[activeTab]}
+                                isCustomView={!bookStyleRun}
+                                isPartial={isPartial}
+                            />
+                        )}
+                    </>
                 )}
             </div>
 
             {/* ── Risk Report ── */}
             <div className="dashboard-section">
                 <h3 className="section-title">📋 Risk validation</h3>
-                <RiskPanel riskReport={riskReport} />
+                <RiskPanel
+                    riskReport={riskReport}
+                    portfolioContext={!bookStyleRun ? portfolioContextRows : []}
+                    isPartial={isPartial}
+                />
             </div>
         </div>
     );
