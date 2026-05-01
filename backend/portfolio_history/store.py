@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 _DEFAULT_FILE = "paper_daily_history.sqlite"
+_STARTING_EQUITY = 100_000.0
 
 
 def _results_dir() -> Path:
@@ -56,6 +57,14 @@ def init_schema(conn: sqlite3.Connection) -> None:
     if "holdings_weights_json" not in cols:
         conn.execute("ALTER TABLE paper_daily ADD COLUMN holdings_weights_json TEXT")
         conn.commit()
+    # Normalize legacy gross_short: column is stored as magnitude (fraction of NAV, >= 0).
+    # Older rows sometimes stored the algebraic sum of short weights (~-0.5); daily MTM paths
+    # store |short sleeve| (~+0.5), which made charts jump ~-55% -> +55% on the first replay row.
+    conn.execute(
+        "UPDATE paper_daily SET gross_short = ABS(gross_short) "
+        "WHERE gross_short IS NOT NULL AND gross_short < 0"
+    )
+    conn.commit()
 
 
 def _prev_equity_after(conn: sqlite3.Connection, as_of_date: str) -> Optional[float]:
@@ -117,7 +126,7 @@ def upsert_paper_daily_row(
                 float(cash_after),
                 int(n_positions),
                 float(gross_long),
-                float(gross_short),
+                abs(float(gross_short)),
                 int(trades_count),
                 source,
                 created,
@@ -176,7 +185,7 @@ def _row_dict_from_tuple(r: tuple[Any, ...]) -> Dict[str, Any]:
         "cash_after": r[4],
         "n_positions": r[5],
         "gross_long": r[6],
-        "gross_short": r[7],
+        "gross_short": abs(float(r[7])) if r[7] is not None else None,
         "trades_count": r[8],
         "source": r[9],
         "created_at": r[10],
@@ -255,7 +264,7 @@ def list_paper_daily_rows(*, limit: int = 2000) -> List[Dict[str, Any]]:
     if not rows:
         return []
 
-    base = float(rows[0]["equity_after"])
+    base = _STARTING_EQUITY
     prev_eq: float | None = None
     for d in rows:
         eq = float(d["equity_after"])

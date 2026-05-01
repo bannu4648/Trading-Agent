@@ -83,6 +83,7 @@ def run_sp500_screened(
             "tickers": [],
             "tickers_universe": tickers,
             "universe": "sp500_screened",
+            "source": "live_rebalance",
             "as_of_end_date": end_date,
             "as_of_start_date": start_date,
             "research_total": 0,
@@ -364,7 +365,7 @@ def run_sp500_screened(
             initial_cash=paper_initial_cash,
             force=paper_force,
             as_of_date=as_of,
-            history_source="api_sp500",
+            history_source="live_rebalance",
         )
         _emit("paper", "Paper rebalance finished")
 

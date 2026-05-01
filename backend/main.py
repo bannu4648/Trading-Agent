@@ -63,6 +63,8 @@ app.add_middleware(
         "http://127.0.0.1:5173",
         *_extra_origins,
     ],
+    # Vite picks another port when 5173 is busy (e.g. 5174); browser origin must match exactly.
+    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1):\d+$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -184,6 +186,12 @@ class DailyPaperRequest(BaseModel):
         None,
         description="Portfolio state JSON path; default results/paper_state.json under project root",
     )
+
+
+class Top20DailyPnlRequest(BaseModel):
+    """Mark-to-market PnL update for Top20 history series."""
+
+    trade_date: str | None = Field(None, description="YYYY-MM-DD; default UTC today")
 
 
 class JobResponse(BaseModel):
@@ -459,7 +467,7 @@ def _run_daily_paper_job(job_id: str, req: DailyPaperRequest) -> None:
                 logger.info("[job %s] Daily paper skipped (row exists for %s)", job_id, trade_date)
                 return
 
-        state_rel = req.state_file or "results/paper_state.json"
+        state_rel = req.state_file or "results/paper_state_sp500.json"
         logger.info("[job %s] Starting daily paper run for %s", job_id, trade_date)
         result = run_daily_paper_trade_job(
             trade_date=trade_date,
@@ -478,7 +486,7 @@ def _run_daily_paper_job(job_id: str, req: DailyPaperRequest) -> None:
             live_synthesis=req.live_synthesis,
             candidate_pool_mult=req.candidate_pool_mult,
             limit_universe=req.limit_universe,
-            history_source="daily_ui",
+            history_source="pnl_update",
             progress_callback=_on_progress,
         )
         serializable = json.loads(json.dumps(result, default=to_serializable))
@@ -495,6 +503,39 @@ def _run_daily_paper_job(job_id: str, req: DailyPaperRequest) -> None:
     finally:
         if emit_token is not None:
             reset_stream_emitter(emit_token, job_ctx_token)
+        _stream_put(
+            job_id,
+            {
+                "type": "job_done",
+                "status": _jobs[job_id].get("status", "unknown"),
+                "error": _jobs[job_id].get("error"),
+            },
+        )
+
+
+def _run_top20_daily_pnl_job(job_id: str, req: Top20DailyPnlRequest) -> None:
+    import sys as _sys
+
+    if _BACKEND_DIR not in _sys.path:
+        _sys.path.insert(0, _BACKEND_DIR)
+    from technical_agent.shared.serialization import to_serializable
+    from top20_history import run_top20_pnl_update
+
+    try:
+        trade_date = (req.trade_date or "").strip() or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        result = run_top20_pnl_update(trade_date=trade_date)
+        serializable = json.loads(json.dumps(result, default=to_serializable))
+        _jobs[job_id]["status"] = "completed"
+        _jobs[job_id]["result"] = serializable
+        _jobs[job_id]["partial_result"] = None
+        _jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
+        logger.info("[job %s] Top20 daily pnl completed", job_id)
+    except Exception as exc:
+        logger.error("[job %s] Top20 daily pnl failed: %s", job_id, exc, exc_info=True)
+        _jobs[job_id]["status"] = "failed"
+        _jobs[job_id]["error"] = str(exc)
+        _jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
+    finally:
         _stream_put(
             job_id,
             {
@@ -526,6 +567,24 @@ def get_paper_history(limit: int = 2000):
 
     cap = max(1, min(int(limit), 50_000))
     rows = list_paper_daily_rows(limit=cap)
+    return PaperHistoryResponse(
+        rows=rows,
+        count=len(rows),
+        database=str(get_database_path().resolve()),
+    )
+
+
+@app.get("/api/top20-history", response_model=PaperHistoryResponse)
+def get_top20_history(limit: int = 2000):
+    """
+    Chronological rows for Top20 long/short runs, rebuilt from `top20_longshort_*.json`
+    into a dedicated SQLite database (`results/top20_daily_history.sqlite`).
+    """
+    from top20_history import ensure_top20_history_exists, get_database_path, list_top20_rows
+
+    ensure_top20_history_exists()
+    cap = max(1, min(int(limit), 50_000))
+    rows = list_top20_rows(limit=cap)
     return PaperHistoryResponse(
         rows=rows,
         count=len(rows),
@@ -646,6 +705,25 @@ def start_daily_paper(req: DailyPaperRequest):
     _stream_queues[job_id] = queue.Queue(maxsize=_STREAM_QUEUE_MAX)
     _executor.submit(_run_daily_paper_job, job_id, req)
     logger.info("[api] Started daily paper job %s", job_id)
+    return JobResponse(job_id=job_id, status="running")
+
+
+@app.post("/api/analyze/daily-paper-top20", response_model=JobResponse)
+def start_daily_paper_top20(req: Top20DailyPnlRequest):
+    """Background mark-to-market update for Top20 history."""
+    job_id = str(uuid.uuid4())
+    _jobs[job_id] = {
+        "status": "running",
+        "result": None,
+        "partial_result": None,
+        "error": None,
+        "tickers": [],
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "completed_at": None,
+        "job_kind": "daily_paper_top20",
+    }
+    _executor.submit(_run_top20_daily_pnl_job, job_id, req)
+    logger.info("[api] Started top20 daily pnl job %s", job_id)
     return JobResponse(job_id=job_id, status="running")
 
 

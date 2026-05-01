@@ -113,6 +113,14 @@ export async function getPaperHistory(limit = 2000) {
   return res.json();
 }
 
+/** Top 20 long/short history rebuilt from saved result files. */
+export async function getTop20History(limit = 2000) {
+  const q = new URLSearchParams({ limit: String(limit) });
+  const res = await fetch(`${API_BASE}/api/top20-history?${q}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
 /** UTC calendar date + whether paper_daily already has a row for today. */
 export async function getPaperDailyStatus() {
   const res = await fetch(`${API_BASE}/api/paper-daily-status`);
@@ -121,8 +129,7 @@ export async function getPaperDailyStatus() {
 }
 
 /**
- * Background job: full S&P 500 daily paper pipeline (same as run_daily_paper_trade.py).
- * Poll getJobStatus(job_id) until completed / failed.
+ * Background job: S&P 500 screened daily P&L MTM — same stack as run_daily_paper_trade.py (latest screened JSON → state align → SQLite).
  */
 export async function startDailyPaper(options = {}) {
   const body = {
@@ -145,6 +152,20 @@ export async function startDailyPaper(options = {}) {
     state_file: options.stateFile ?? null,
   };
   const res = await fetch(`${API_BASE}/api/analyze/daily-paper`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+/** Background job: Top 20 daily P&L (/api/analyze/daily-paper-top20 → run_top20_pnl_update). */
+export async function startDailyPaperTop20(options = {}) {
+  const body = {
+    trade_date: options.tradeDate ?? null,
+  };
+  const res = await fetch(`${API_BASE}/api/analyze/daily-paper-top20`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
