@@ -119,6 +119,24 @@ export async function getPaperDailyStatus() {
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
+// TODO: remove this later
+/** Local/report helper: regenerate the labeled April historical paper simulation dataset. */
+export async function generateAprilPaperSimulation() {
+  const res = await fetch(`${API_BASE}/api/dev/generate-april-paper-simulation`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    let detail = '';
+    try {
+      const payload = await res.json();
+      detail = payload?.detail ? `: ${JSON.stringify(payload.detail)}` : '';
+    } catch {
+      detail = '';
+    }
+    throw new Error(`API error: ${res.status}${detail}`);
+  }
+  return res.json();
+}
 
 /**
  * Background job: full S&P 500 daily paper pipeline (same as run_daily_paper_trade.py).
