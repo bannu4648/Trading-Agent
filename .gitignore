@@ -8,6 +8,7 @@ venv/
 output/
 results/
 report/
+results.zip
 node_modules/
 frontend/dist/
 .DS_Store
