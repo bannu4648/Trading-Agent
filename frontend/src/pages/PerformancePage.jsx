@@ -17,7 +17,6 @@ import {
     getPaperHistory,
     getPaperDailyStatus,
     startDailyPaper,
-    generateAprilPaperSimulation, // TODO: remove this later
     getJobStatus,
     JOB_STATUS_FIRST_POLL_MS,
     JOB_STATUS_POLL_INTERVAL_MS,
@@ -57,8 +56,6 @@ export default function PerformancePage() {
     const [tradeDateOverride, setTradeDateOverride] = useState('');
     const [skipIfAlreadyRun, setSkipIfAlreadyRun] = useState(false);
     const [noLlm, setNoLlm] = useState(true);
-    const [simulationRunning, setSimulationRunning] = useState(false); // TODO: remove this later
-    const [simulationMessage, setSimulationMessage] = useState(''); // TODO: remove this later
 
     const pollRef = useRef(null);
 
@@ -139,25 +136,6 @@ export default function PerformancePage() {
             setJobMessage(e.message || String(e));
         }
     };
-// TODO: remove this later
-    const runAprilSimulation = async () => {
-        setSimulationRunning(true);
-        setSimulationMessage('Generating April simulation…');
-        setError(null);
-        try {
-            const payload = await generateAprilPaperSimulation();
-            const rows = payload?.summary?.history_rows;
-            const files = payload?.summary?.result_files;
-            setSimulationMessage(
-                `April simulation regenerated${rows ? ` (${rows} rows` : ''}${files ? `, ${files} result files` : ''}.`,
-            );
-            await refreshAll({ silent: true });
-        } catch (e) {
-            setSimulationMessage(`Failed: ${e.message || String(e)}`);
-        } finally {
-            setSimulationRunning(false);
-        }
-    };
 
     const chartData = useMemo(
         () =>
@@ -212,49 +190,6 @@ export default function PerformancePage() {
 
     return (
         <div>
-{/* TODO: start removing from here later */}
-            <div
-                style={{
-                    position: 'fixed',
-                    right: '24px',
-                    bottom: '24px',
-                    zIndex: 50,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'flex-end',
-                    gap: 'var(--sp-xs)',
-                }}
-            >
-                {simulationMessage && (
-                    <div
-                        style={{
-                            maxWidth: '280px',
-                            padding: '8px 12px',
-                            borderRadius: '8px',
-                            background: 'rgba(15,23,42,0.92)',
-                            border: '1px solid rgba(148,163,184,0.25)',
-                            color: simulationMessage.startsWith('Failed') ? 'var(--accent-red)' : 'var(--text-secondary)',
-                            fontSize: '0.78rem',
-                            boxShadow: 'var(--shadow-md)',
-                        }}
-                    >
-                        {simulationMessage}
-                    </div>
-                )}
-                <button
-                    type="button"
-                    className="btn btn-secondary"
-                    onClick={runAprilSimulation}
-                    disabled={simulationRunning || jobRunning}
-                    style={{
-                        boxShadow: 'var(--shadow-lg)',
-                        border: '1px solid rgba(59,130,246,0.35)',
-                    }}
-                >
-                    {simulationRunning ? 'Generating April…' : 'Generate April simulation'}
-                </button>
-            </div>
-{/* remove till here later */}
             <div className="page-header">
                 <h2>Paper portfolio performance</h2>
                 <p>
