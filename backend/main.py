@@ -20,6 +20,7 @@ import asyncio
 import json
 import logging
 import queue
+import subprocess
 import sys
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -546,6 +547,50 @@ def get_paper_daily_status():
         today_row=row,
         database=str(get_database_path().resolve()),
     )
+
+# TODO: remove this later
+@app.post("/api/dev/generate-april-paper-simulation")
+def generate_april_paper_simulation():
+    """Regenerate the labeled April 2026 paper simulation dataset for local report/demo use."""
+    script = Path(__file__).resolve().parent / "scripts" / "generate_april_paper_simulation.py"
+    if not script.exists():
+        raise HTTPException(status_code=404, detail="Simulation generator script not found")
+
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(script)],
+            cwd=str(Path(__file__).resolve().parent.parent),
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(status_code=504, detail=f"Simulation generation timed out: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Simulation generation failed: {exc}") from exc
+
+    if proc.returncode != 0:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "Simulation generation failed",
+                "stdout": proc.stdout,
+                "stderr": proc.stderr,
+                "returncode": proc.returncode,
+            },
+        )
+
+    payload: Dict[str, Any] = {
+        "ok": True,
+        "stdout": proc.stdout,
+        "stderr": proc.stderr,
+    }
+    try:
+        payload["summary"] = json.loads(proc.stdout)
+    except Exception:
+        payload["summary"] = None
+    return payload
 
 
 @app.post("/api/analyze", response_model=JobResponse)

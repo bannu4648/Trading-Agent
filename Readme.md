@@ -1,119 +1,159 @@
-# Trading-Agent (LLM Multi-Agent Financial System)
+# Trading-Agent
 
-A unified autonomous stock analysis and portfolio allocation platform. The system leverages an orchestrator to run parallel domain-expert LLM agents (Technical, Sentiment, and Fundamental Analysis), synthesizes their findings into a cohesive narrative, and passes the intelligence to a Trader Agent which sizes positions via mathematical models dynamically checked by a Portfolio Validator.
+Trading-Agent is a full-stack multi-agent system for stock research, portfolio construction, and local paper-trading evaluation. It combines quantitative technical analysis, sentiment analysis, fundamental snapshots, LLM synthesis, long/short allocation, trade-order generation, portfolio validation, and a React dashboard for running and reviewing jobs.
 
-![High-Level Pipeline Architecture](./results/pipeline_overview_v3_1772354485571.png)
+The application is designed for analysis and simulated execution. It does not place real brokerage orders.
 
-## 🚀 Quick Start
+## Current Capabilities
 
-1. **Install Dependencies**
-   The project uses `uv` for package management, but pip can be used with the included `pyproject.toml`.
-   ```bash
-   python3 -m venv .venv
-   source .venv/bin/activate
-   pip install -r requirements.txt # or uv sync
-   ```
+- Three run modes in the web app: custom ticker analysis, Top 20 long/short, and S&P 500 screened analysis.
+- Wide-universe S&P 500 screening that runs technical analysis first, selects a smaller candidate set, then performs deeper sentiment, fundamentals, synthesis, allocation, trading, and validation.
+- Long/short allocator support for Top 20 and S&P 500 screened runs, including signed target weights for short positions.
+- Live job status and Server-Sent Events streaming for stage updates, LLM output chunks, and completion events.
+- Results dashboard with portfolio allocation charts, per-ticker research tabs, trade orders, risk reports, and partial loading states for long-running jobs.
+- Local paper-trading support using JSON portfolio state plus SQLite daily history.
+- Paper performance page with status, daily paper job launch, refresh controls, equity charts, return charts, and historical rows.
+- Persistent frontend session state so pipeline progress and results survive navigation between pages.
 
-2. **Run Full Analysis (CLI)**
-   The orchestrator runs the full pipeline for multiple tickers.
-   ```bash
-   python backend/run_analysis.py --tickers AAPL,NVDA,MSFT
-   ```
+For a deeper architecture guide, see [`docs/PROJECT_README.md`](docs/PROJECT_README.md). For stage-by-stage pipeline details and troubleshooting, see [`docs/PIPELINE.md`](docs/PIPELINE.md).
 
-3. **Run the React UI**
-   Start the FastAPI backend and React frontend in two terminals:
-   ```bash
-   # Terminal 1 — Backend API
-   source .venv/bin/activate
-   python -m uvicorn backend.main:app --port 8000
+## Quick Start
 
-   # Terminal 2 — React Frontend
-   cd frontend
-   npm install   # first time only
-   npm run dev
-   ```
-   Open `http://localhost:5173` in your browser.
+### 1. Backend Setup
 
-## 🖥️ Architecture
+Create and activate a Python environment from the repository root:
 
-The project follows a clean separation of concerns with two top-level modules:
-
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
+
+Start the FastAPI backend:
+
+```bash
+python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
+```
+
+### 2. Frontend Setup
+
+In a second terminal:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173`.
+
+### 3. Optional CLI Runs
+
+Run a custom ticker analysis:
+
+```bash
+python backend/run_analysis.py --tickers AAPL,NVDA,MSFT
+```
+
+Run the daily local paper workflow:
+
+```bash
+python backend/run_daily_paper_trade.py --date $(date -u +%F) --no-llm
+```
+
+## Application Pages
+
+| Page | Route | Purpose |
+|------|-------|---------|
+| Launch | `/` | Landing page for selecting the main workflow. |
+| Custom Ticker | `/run/developer?mode=custom` | Analyze user-supplied tickers with the full research stack and ReAct trader. |
+| Top 20 Long/Short | `/run/developer?mode=top20` | Run a curated large-cap universe through research, allocator, trader, and validation. |
+| S&P 500 Screened | `/run/developer?mode=sp500` | Screen the S&P 500, research selected candidates, then build a long/short book. |
+| Results History | `/history` | Browse saved JSON run artifacts from `results/`. |
+| Long/Short | `/longshort` | Review long/short-oriented outputs. |
+| Paper Performance | `/performance` | View local paper-trading equity history, daily status, and performance charts. |
+
+## Repository Layout
+
+```text
 Trading-Agent/
-├── backend/                  ← All Python / agent / API code
-│   ├── main.py               ← FastAPI server
-│   ├── run_analysis.py       ← Orchestrator pipeline
-│   ├── technical_agent/
-│   ├── sentiment_agent/
-│   ├── fundamentals_agent/
-│   ├── summarizer_agent/
-│   ├── trader_agent/
-│   └── portfolio_validator/
-├── frontend/                 ← React (Vite) UI
-│   ├── src/
+├── backend/
+│   ├── main.py                     # FastAPI app, job lifecycle, stream/status endpoints
+│   ├── run_analysis.py             # Custom ticker pipeline
+│   ├── run_top20_longshort_job.py   # Top 20 long/short pipeline
+│   ├── run_sp500_screened_job.py    # S&P 500 screened pipeline
+│   ├── run_daily_paper_trade.py     # Local daily paper workflow
+│   ├── technical_agent/             # OHLCV indicators and technical signals
+│   ├── sentiment_agent/             # LangGraph sentiment workflow
+│   ├── fundamentals_agent/          # Financial snapshot tools
+│   ├── summarizer_agent/            # LLM synthesis layer
+│   ├── trader_agent/                # Recommendation adapter and trader logic
+│   ├── portfolio_longshort/         # Deterministic long/short allocator
+│   ├── portfolio_validator/         # Risk validation
+│   ├── paper_simulator/             # Local rebalance and portfolio metrics
+│   └── portfolio_history/           # SQLite paper history storage
+├── frontend/
+│   ├── src/pages/                   # Launch, pipeline, history, long/short, performance pages
+│   ├── src/components/              # Dashboards, charts, stream panels, ticker cards
 │   └── package.json
-├── results/                  ← Saved JSON outputs
+├── docs/
+│   ├── PROJECT_README.md
+│   └── PIPELINE.md
+├── results/                         # JSON results, paper_state.json, SQLite history
+├── requirements.txt
 ├── pyproject.toml
 └── .env
 ```
 
-| Layer | Technology | Path |
-|-------|-----------|------|
-| **Frontend** | React (Vite) | `frontend/` |
-| **Backend API** | FastAPI + Uvicorn | `backend/main.py` |
-| **Analysis Engine** | Python (LangGraph, LangChain) | `backend/run_analysis.py` + agent modules |
+## Main Pipeline Modes
 
-**Pipeline details (stages, top‑20 vs custom, why some tickers show N/A):** see [docs/PIPELINE.md](docs/PIPELINE.md).
+### Custom Ticker Analysis
 
-**End-to-end guide with architecture diagrams (Mermaid):** [docs/PROJECT_README.md](docs/PROJECT_README.md).
+Custom mode accepts a user-supplied ticker list. The backend runs technical analysis, sentiment, fundamentals, synthesis, recommendation normalization, the ReAct trader, and portfolio validation. This path is best for focused research on a small set of names.
 
-### API Endpoints
+### Top 20 Long/Short
+
+Top 20 mode uses a curated large-cap universe. Every ticker receives full research coverage, then the long/short allocator selects and sizes the strongest long and short candidates. The trader follows allocator target weights so the displayed orders and portfolio chart stay aligned.
+
+### S&P 500 Screened
+
+S&P 500 screened mode is optimized for larger universes. It performs a wide technical pass across the index, ranks candidates using formula-based recommendation scores, then performs deeper sentiment, fundamentals, synthesis, allocation, trading, and validation only on the selected candidate set.
+
+## Agent Stack
+
+| Component | Role |
+|-----------|------|
+| Technical Analyst | Loads price data, computes indicators, and emits rule-based technical signals. |
+| Sentiment Agent | Uses a LangGraph workflow to combine news, analyst, social, and web context where enabled. |
+| Fundamentals Layer | Retrieves financial metrics such as valuation, profitability, leverage, growth, and quality indicators. |
+| Summarizer Agent | Produces a human-readable synthesis from technical, sentiment, and fundamental evidence. |
+| Research Adapter | Converts heterogeneous agent output into structured recommendations: signal, conviction, expected return, volatility, and rationale. |
+| Risk Portfolio Agent | Builds signed target weights for long/short books. |
+| Trader Agent | Converts recommendations or allocator targets into actionable simulated orders. |
+| Portfolio Validator | Checks the proposed book for concentration, exposure, and risk warnings. |
+| Paper Simulator | Rebalances a local simulated portfolio and records daily performance history. |
+
+## API Overview
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/api/analyze` | Launch a multi-agent analysis (runs in background) |
-| `POST` | `/api/analyze/top20-longshort` | Top‑20 universe: research + allocator + trader subset (see [docs/PIPELINE.md](docs/PIPELINE.md)) |
-| `GET` | `/api/status/{job_id}` | Poll analysis job progress |
-| `GET` | `/api/stream/{job_id}` | SSE: LLM chunks, stage labels, `job_done` |
-| `GET` | `/api/results` | List all past result files |
-| `GET` | `/api/results/{filename}` | Load a specific past result |
-| `GET` | `/api/health` | Health check |
+| `GET` | `/api/health` | Backend health check. |
+| `POST` | `/api/analyze` | Start a custom ticker analysis job. |
+| `POST` | `/api/analyze/top20-longshort` | Start a Top 20 long/short job. |
+| `POST` | `/api/analyze/sp500-screened` | Start an S&P 500 screened job. |
+| `POST` | `/api/analyze/daily-paper` | Start the local daily paper workflow. |
+| `GET` | `/api/status/{job_id}` | Poll job state and partial results. |
+| `GET` | `/api/stream/{job_id}` | Stream stage and LLM events over SSE. |
+| `GET` | `/api/results` | List saved result JSON files. |
+| `GET` | `/api/results/{filename}` | Load a saved result file. |
+| `GET` | `/api/paper-history` | Return paper performance history from SQLite. |
+| `GET` | `/api/paper-daily-status` | Report whether today's paper row exists. |
 
-## 🛠️ The Agents
+## Configuration
 
-### 1. Technical Analyst Agent
-- Fetches OHLCV data and computes comprehensive indicators (Dual RSI, MACD, Bollinger Bands, ATR, Supertrend, etc.).
-- Evaluates 12+ standard mathematical signals dynamically.
-- Automatically handles overbought/oversold boundaries dynamically for volatile tech stocks.
-
-### 2. Multi-Agent Sentiment Agent
-- A sequential *LangGraph* pipeline designed to respect free-tier API rate limits.
-- Incorporates and scores data from:
-  - **News**: Global headlines (Finviz, Yahoo).
-  - **Social**: Reddit keyword buzz (ApeWisdom).
-  - **Analysts**: Wall Street Ratings (Finnhub).
-  - **Web**: General blog/context searches (DuckDuckGo).
-- Uses a weighted aggregator (Analyst 40%, News 35%, Social 15%, Web 10%).
-
-### 3. Fundamentals Agent
-- Fetches primary financial statements from `yfinance` with AlphaVantage fallback.
-- Computes core ratios (P/E, Profit Margins, Debt/Equity).
-- Serves as the ultimate quality gate via the **9-criterion Piotroski F-Score**. Any stock scoring <= 2 is hard-overridden to HOLD.
-
-### 4. Summarizer Agent
-- A sophisticated LLM synthesize node that ingests the conflicting numerical and text signals from the previous three agents to build a human-readable recommendation card.
-
-### 5. Trader Agent & Portfolio Validator
-- Acts as the portfolio manager. Translates textual "Conviction" and "Expected Return" into quantitative inputs.
-- Chooses dynamically from four position sizing algorithms: *Equal Weight, Conviction Weight, Volatility Parity, and Half-Kelly (Kelly Criterion)*.
-- The **Portfolio Validator** strictly enforces a 40% single-asset cap and guarantees a 10% uninvested cash floor.
-
-## ⚙️ Configuration (.env)
-
-Create a `.env` file in the project root. The system primarily relies on Groq for Trader logic and Gemini for Sentiment scoring, though both can be globally re-mapped.
+Create a `.env` file in the project root. Values depend on which providers and data sources you want to enable:
 
 ```env
-# --- Main Providers ---
 LLM_PROVIDER=groq
 GROQ_API_KEY=your_groq_key
 GROQ_MODEL=llama-3.3-70b-versatile
@@ -121,14 +161,19 @@ GROQ_MODEL=llama-3.3-70b-versatile
 GEMINI_API_KEY=your_gemini_key
 GEMINI_MODEL=gemini-2.0-flash
 
-# --- Data APIS ---
+MISTRAL_API_KEY=your_mistral_key
 FINNHUB_API_KEY=your_finnhub_key
 ALPHAVANTAGE_API_KEY=your_alphavantage_key
 
-# --- Configs ---
-LANGCHAIN_TRACING_V2=true 
+SENTIMENT_FAST_PIPELINE=true
+LANGCHAIN_TRACING_V2=false
 LANGCHAIN_API_KEY=your_langsmith_key
 ```
 
-## 📊 Output
-Results are saved as JSON cache files in the `./results/` directory, while logs output directly into the stream. When using the React UI, a rich dashboard with portfolio allocation charts, per-ticker detail tabs, and risk validation panels is available.
+Most jobs can still run in reduced mode when some optional data or LLM providers are unavailable, but richer sentiment and synthesis require valid provider keys.
+
+## Outputs
+
+Saved analysis runs are written to `results/*.json`. Local paper-trading state is stored in `results/paper_state.json`, and daily performance history is stored in `results/paper_daily_history.sqlite` unless overridden by configuration.
+
+The React UI reads these artifacts through the FastAPI API and renders allocation charts, ticker-level research, trade orders, validation reports, and paper-performance history.
